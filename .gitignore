@@ -1,0 +1,29 @@
+# Virtual environments
+stacc_venv/
+venv/
+.env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Docs (ONLY if auto-generated)
+docs/_build/
+docs/build/
+site/
