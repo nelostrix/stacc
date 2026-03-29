@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stacc"
+version = "0.1.0"
+description = "stacc — The Universal Robotics Development Platform"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "stacc robotics"}
+]
+keywords = ["robotics", "simulation", "mujoco", "ros", "robot", "kinematics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+sim = [
+    "mujoco>=3.0.0",
+    "glfw>=2.6.0",
+]
+ai = [
+    "torch>=2.0.0",
+    "opencv-python>=4.8.0",
+]
+hal = [
+    "pyserial>=3.5",
+    "paramiko>=3.3.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "flake8>=6.0",
+    "black>=23.0",
+    "mypy>=1.0",
+]
+all = ["stacc[sim,ai,hal,dev]"]
+
+[project.scripts]
+stacc = "stacc.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/YOUR_ORG/stacc"
+Documentation = "https://docs.stacc.dev"
+Repository = "https://github.com/YOUR_ORG/stacc"
+Issues = "https://github.com/YOUR_ORG/stacc/issues"
+
+[tool.setuptools.packages.find]
+include = ["stacc*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.black]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
