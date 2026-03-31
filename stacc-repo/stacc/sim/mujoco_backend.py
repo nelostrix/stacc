@@ -42,9 +42,22 @@ class MuJoCoBackend:
 
     def step(self, dt: float):
         """step physics, sync state ,update viewer."""
+        # Write torques from robot into MuJoCo
         for stacc_idx, qpos_adr in self._joint_map.items():
-            self.robot._state["joint_positions"][stacc_idx] = self.data.qpos[qpos_adr]
-            self.robot._state["joint_velocities"][stacc_idx] = self.data.qvel[qpos_adr]
+            if stacc_idx < self.model.nu:
+                self.data.ctrl[stacc_idx] = self.robot._state["joint_torques"][
+                    stacc_idx
+                ]
+            # 2. step Mujoco physics
+            mujoco.mj_step(self.model, self.data)
+            # 3 Read state back into robot
+            for stacc_idx, qpos_adr in self._joint_map.items():
+                self.robot._state["joint_positions"][stacc_idx] = self.data.qpos[
+                    qpos_adr
+                ]
+                self.robot._state["joint_velocities"][stacc_idx] = self.data.qvel[
+                    qpos_adr
+                ]
 
             self._step_count += 1
             if self.viewer and self._step_count % self._render_every == 0:

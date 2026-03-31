@@ -3,9 +3,12 @@
 Provides the core interface for defining, simulating, and controlling robots.
 Every robot has joints, links, sensors, and a control loop.
 """
+
 from __future__ import annotations
+
 import time
-from typing import Callable, Optional, List, Dict, Any
+from typing import Any, Callable, Dict, List, Optional
+
 from stacc.core.joint import Joint
 from stacc.core.link import Link
 
@@ -33,7 +36,7 @@ class Robot:
         self.end_effectors: List[Any] = []
         self.time: float = 0.0
         self.dt: float = 0.001  # default 1kHz
-
+        self.fixed_base: bool = True
         self._update_callbacks: List[Callable] = []
         self._start_callbacks: List[Callable] = []
         self._stop_callbacks: List[Callable] = []

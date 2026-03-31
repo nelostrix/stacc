@@ -118,7 +118,7 @@ def robot_to_mjcf(robot, config) -> str:
     # Calculate body positions along Z axis based on geometry
     # Each link is stacked above the previous one
     current_parent = worldbody
-    z_offset = 0.5  # Start above ground
+    z_offset = 0.5 if robot.fixed_base else 3.0  # Start above ground
 
     for i, link in enumerate(links):
         # Compute height of this link for positioning
@@ -137,7 +137,9 @@ def robot_to_mjcf(robot, config) -> str:
 
         # Create body
         body = ET.SubElement(current_parent, "body", name=link.name, pos=pos)
-
+        # Free-floating base for mobile robots
+        if i == 0 and not robot.fixed_base:
+            ET.SubElement(body, "freejoint", name="root")
         # Add joint (joint i connects link i to link i+1)
         # So link 0 has no joint, link 1 has joint 0, link 2 has joint 1, etc.
         if i > 0 and (i - 1) < len(joints):
