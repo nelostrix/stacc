@@ -3,9 +3,11 @@
 This is the orchestrator that ties together the physics backend (MuJoCo/Bullet),
 sensor simulation, and the user's control logic.
 """
+
 from __future__ import annotations
+
 import time
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from stacc.core.robot_base import Robot
@@ -79,6 +81,7 @@ class SimulationEngine:
         if engine == "mujoco":
             try:
                 from stacc.sim.mujoco_backend import MuJoCoBackend
+
                 self._physics_backend = MuJoCoBackend(self.robot, self.config)
             except ImportError:
                 print(f"  [sim] MuJoCo not available, falling back to internal physics")
@@ -86,17 +89,22 @@ class SimulationEngine:
         elif engine == "bullet":
             try:
                 from stacc.sim.bullet_backend import BulletBackend
+
                 self._physics_backend = BulletBackend(self.robot, self.config)
             except ImportError:
-                print(f"  [sim] PyBullet not available, falling back to internal physics")
+                print(
+                    f"  [sim] PyBullet not available, falling back to internal physics"
+                )
                 self._physics_backend = _InternalPhysics(self.robot, self.config)
         else:
             self._physics_backend = _InternalPhysics(self.robot, self.config)
 
     def run(self):
         """Run the simulation for the configured duration."""
-        print(f"  [sim] Starting simulation: {self.config.physics_engine}, "
-              f"dt={self.config.timestep}s, duration={self.config.duration}s")
+        print(
+            f"  [sim] Starting simulation: {self.config.physics_engine}, "
+            f"dt={self.config.timestep}s, duration={self.config.duration}s"
+        )
 
         self._init_physics()
         self.state.running = True
@@ -142,9 +150,11 @@ class SimulationEngine:
                 if step > 0 and step % 1000 == 0:
                     elapsed = time.time() - wall_start
                     self.state.fps = step / elapsed if elapsed > 0 else 0
-                    print(f"  [sim] t={self.state.time:.1f}s, "
-                          f"step={step}/{total_steps}, "
-                          f"fps={self.state.fps:.0f}")
+                    print(
+                        f"  [sim] t={self.state.time:.1f}s, "
+                        f"step={step}/{total_steps}, "
+                        f"fps={self.state.fps:.0f}"
+                    )
 
         except KeyboardInterrupt:
             print("\n  [sim] Interrupted by user")
@@ -152,10 +162,14 @@ class SimulationEngine:
         finally:
             self.state.running = False
             self.robot._shutdown()
+            if hasattr(self._physics_backend, "close"):
+                self._physics_backend.close()
             elapsed = time.time() - wall_start
             ratio = self.state.time / elapsed if elapsed > 0 else 0
-            print(f"  [sim] Completed: {self.state.time:.1f}s simulated "
-                  f"in {elapsed:.1f}s wall time ({ratio:.1f}x realtime)")
+            print(
+                f"  [sim] Completed: {self.state.time:.1f}s simulated "
+                f"in {elapsed:.1f}s wall time ({ratio:.1f}x realtime)"
+            )
 
     def pause(self):
         self.state.paused = True
@@ -194,6 +208,7 @@ class _InternalPhysics:
 
 
 # ── Module-level convenience function ──
+
 
 def simulate(
     robot: "Robot",
