@@ -27,3 +27,6 @@ dist/
 docs/_build/
 docs/build/
 site/
+
+# File formats
+*.zip
