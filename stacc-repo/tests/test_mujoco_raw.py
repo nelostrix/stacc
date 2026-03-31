@@ -1,38 +1,46 @@
-"""test: verify Mujoco works standalone before Integration with stacc."""
-
-import time
+"""Test MuJoCo physics — guaranteed working pendulum."""
 
 import mujoco
+import numpy as np
 
-# A simple pendulum defined in MJCF XML
-PENDULUM_XML = """
-<mujoco>
-  <option gravity="0 0 -9.81" timestep="0.001"/>
+XML = """
+<mujoco model="pendulum">
+  <compiler angle="radian"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
   <worldbody>
-    <light pos="0 0 3"/>
-    <body name="pendulum" pos="0 0 1">
+    <light pos="0 0 3" dir="0 0 -1"/>
+    <geom type="plane" size="5 5 0.1"/>
+
+    <body name="arm" pos="0 0 2">
       <joint name="hinge" type="hinge" axis="0 1 0"/>
-      <geom type="capsule" size="0.02 0.3" rgba="0.2 0.7 0.3 1"/>
+      <inertial pos="0 0 -0.3" mass="1" diaginertia="0.01 0.01 0.001"/>
+      <geom type="capsule" fromto="0 0 0 0 0 -0.6" size="0.02" rgba="0.2 0.8 0.4 1"/>
     </body>
   </worldbody>
 </mujoco>
 """
 
-# Load model and create data
-model = mujoco.MjModel.from_xml_string(PENDULUM_XML)
+model = mujoco.MjModel.from_xml_string(XML)
 data = mujoco.MjData(model)
 
-# Give the pendulum an initial push
-data.qpos[0] = 1.0  # Start at 1 radian
+# Set initial angle
+data.qpos[0] = 1.0
 
-# Simulate 1000 steps
-print("Stepping physics...")
-for i in range(1000):
+# IMPORTANT: call mj_forward first to initialize internal state
+mujoco.mj_forward(model, data)
+
+print(f"DOF: {model.nv}, Bodies: {model.nbody}, Timestep: {model.opt.timestep}")
+print(f"Initial angle: {data.qpos[0]:.4f}\n")
+
+for i in range(1001):
     mujoco.mj_step(model, data)
-    if i % 200 == 0:
-        print(
-            f"  step {i}: angle={data.qpos[0]:.4f} rad, velocity={data.qvel[0]:.4f} rad/s"
-        )
+    if i % 100 == 0:
+        print(f"  step {i:4d}: angle={data.qpos[0]:+.4f}  velocity={data.qvel[0]:+.4f}")
 
-print(f"\nFinal angle: {data.qpos[0]:.4f} rad")
-print("SUCCESS: MuJoCo physics is working")
+print(f"\nFinal angle: {data.qpos[0]:.4f}")
+if abs(data.qpos[0] - 1.0) > 0.01:
+    print("SUCCESS: Pendulum is swinging (angle changed)")
+else:
+    print("PROBLEM: Angle didn't change — check MuJoCo version")
+    print(f"MuJoCo version: {mujoco.__version__}")
