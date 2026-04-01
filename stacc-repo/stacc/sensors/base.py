@@ -3,10 +3,12 @@
 All sensors in stacc inherit from BaseSensor and provide a uniform
 interface for reading data, configuring noise models, and calibration.
 """
+
 from __future__ import annotations
-from typing import Optional, List, Dict, Any
+
 import math
 import random
+from typing import Any, Dict, List, Optional
 
 
 class BaseSensor:
@@ -72,125 +74,3 @@ class BaseSensor:
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name='{self.name}', rate={self.rate}Hz)"
-
-
-class IMU(BaseSensor):
-    """Inertial Measurement Unit — accelerometer + gyroscope + magnetometer.
-
-    Args:
-        rate: Sampling rate (default 100Hz, flight controllers use 400Hz)
-        accel_noise: Accelerometer noise (m/s², default 0.01)
-        gyro_noise: Gyroscope noise (rad/s, default 0.001)
-        mag_noise: Magnetometer noise (μT, default 0.1)
-    """
-
-    def __init__(
-        self,
-        rate: float = 100.0,
-        accel_noise: float = 0.01,
-        gyro_noise: float = 0.001,
-        mag_noise: float = 0.1,
-        **kwargs,
-    ):
-        super().__init__(name="imu", rate=rate, **kwargs)
-        self.accel_noise = accel_noise
-        self.gyro_noise = gyro_noise
-        self.mag_noise = mag_noise
-
-        # Current readings
-        self.acceleration = [0.0, 0.0, 9.81]  # m/s² (gravity)
-        self.angular_velocity = [0.0, 0.0, 0.0]  # rad/s
-        self.magnetic_field = [20.0, 0.0, 40.0]  # μT
-
-        # Fused orientation (Euler angles)
-        self.roll = 0.0
-        self.pitch = 0.0
-        self.yaw = 0.0
-
-    def read(self) -> Dict[str, List[float]]:
-        """Read all IMU axes."""
-        return {
-            "acceleration": self.add_noise_vector(self.acceleration),
-            "angular_velocity": [
-                self.acceleration[i] + random.gauss(0, self.gyro_noise)
-                for i in range(3)
-            ],
-            "magnetic_field": [
-                self.magnetic_field[i] + random.gauss(0, self.mag_noise)
-                for i in range(3)
-            ],
-            "orientation": [self.roll, self.pitch, self.yaw],
-        }
-
-    def read_acceleration(self) -> List[float]:
-        return [a + random.gauss(0, self.accel_noise) for a in self.acceleration]
-
-    def read_gyroscope(self) -> List[float]:
-        return [g + random.gauss(0, self.gyro_noise) for g in self.angular_velocity]
-
-
-class IRArray(BaseSensor):
-    """Infrared sensor array for line following.
-
-    Args:
-        count: Number of IR sensors in the array
-        spacing: Distance between sensors (meters)
-    """
-
-    def __init__(self, count: int = 5, spacing: float = 0.01, **kwargs):
-        super().__init__(name="ir_array", rate=200.0, **kwargs)
-        self.count = count
-        self.spacing = spacing
-        self._values = [0.0] * count
-
-    def read(self) -> List[float]:
-        """Read raw IR values (0.0 = white/no line, 1.0 = black/line)."""
-        return self.add_noise_vector(self._values)
-
-    def line_position(self) -> float:
-        """Compute line position as weighted average.
-
-        Returns:
-            -1.0 (far left) to 1.0 (far right), 0.0 = centered
-        """
-        values = self.read()
-        total = sum(values)
-        if total < 0.01:
-            return 0.0
-
-        positions = [
-            (i - (self.count - 1) / 2) / ((self.count - 1) / 2)
-            for i in range(self.count)
-        ]
-        weighted = sum(p * v for p, v in zip(positions, values))
-        return weighted / total
-
-
-class Encoder(BaseSensor):
-    """Rotary encoder for measuring shaft position/velocity.
-
-    Args:
-        ticks_per_rev: Encoder resolution (CPR)
-        gear_ratio: Gear ratio (output/input)
-    """
-
-    def __init__(self, ticks_per_rev: int = 1024, gear_ratio: float = 1.0, **kwargs):
-        super().__init__(name="encoder", rate=1000.0, **kwargs)
-        self.ticks_per_rev = ticks_per_rev
-        self.gear_ratio = gear_ratio
-        self._ticks: int = 0
-        self._prev_ticks: int = 0
-
-    @property
-    def angle(self) -> float:
-        """Current angle in radians."""
-        return (self._ticks / self.ticks_per_rev) * 2 * math.pi / self.gear_ratio
-
-    @property
-    def velocity(self) -> float:
-        """Angular velocity in rad/s (computed from tick difference)."""
-        dticks = self._ticks - self._prev_ticks
-        return (dticks / self.ticks_per_rev) * 2 * math.pi * self.rate / self.gear_ratio
-
-    def read(self) -> Dict[str, float]:
-        return {"angle": self.angle, "velocity": self.velocity, "ticks": self._ticks}
