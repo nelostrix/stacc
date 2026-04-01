@@ -133,7 +133,24 @@ def robot_to_mjcf(robot, config) -> str:
         if i == 0:
             pos = f"0 0 {z_offset}"
         else:
-            pos = f"0 0 {link_height}"
+            # Previous link's half-height + this link's half-height
+            prev_link = links[i - 1]
+            if prev_link.visual and prev_link.visual.shape == "box":
+                prev_half = prev_link.visual.size[2] / 2
+            elif prev_link.visual and prev_link.visual.shape == "cylinder":
+                prev_half = prev_link.visual.length / 2
+            else:
+                prev_half = 0.03
+
+            if link.visual and link.visual.shape == "box":
+                curr_half = link.visual.size[2] / 2
+            elif link.visual and link.visual.shape == "cylinder":
+                curr_half = link.visual.length / 2
+            else:
+                curr_half = 0.03
+
+            offset = prev_half + curr_half
+            pos = f"0 0 {offset}"
 
         # Create body
         body = ET.SubElement(current_parent, "body", name=link.name, pos=pos)
