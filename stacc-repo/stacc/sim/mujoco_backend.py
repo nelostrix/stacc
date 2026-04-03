@@ -39,6 +39,10 @@ class MuJoCoBackend:
 
         self._step_count = 0
         self._render_every = max(1, int(1.0 / (60 * config.timestep)))
+        # wire sensors to mujoco Backend:
+        for sensor in robot.sensors:
+            if hasattr(sensor, "set_mujoco_backend"):
+                sensor.set_mujoco_backend(self.model, self.data)
 
     def step(self, dt: float):
         """step physics, sync state ,update viewer."""
