@@ -5,6 +5,8 @@ import sys
 import time
 from typing import Any, Dict
 
+from stacc.hal.boards import BoardDefinition, get_board
+
 
 class Board:
     """Auto-detect and configure the hardware platform.
@@ -21,8 +23,9 @@ class Board:
         "unknown": "Unknown platform",
     }
 
-    def __init__(self, platform: str = "unknown"):
+    def __init__(self, platform: str = "unknown", definition=None):
         self.platform = platform
+        self.definition = definition
         self.gpio_available = False
         self.i2c_available = False
         self.spi_available = False
@@ -42,10 +45,12 @@ class Board:
                     board.gpio_available = True
                     board.i2c_available = True
                     board.spi_available = True
+                    board.definition = get_board("Raspberry pi 4")
                 elif "jetson" in model:
                     board.platform = "jetson"
                     board.gpio_available = True
                     board.i2c_available = True
+                    board.definition = get_board("Jetson Nano")
             except Exception:
                 pass
 
@@ -55,14 +60,19 @@ class Board:
         return board
 
     def info(self) -> Dict[str, Any]:
-        return {
-            "platform": self.platform,
-            "description": self.PLATFORMS.get(self.platform, "Unknown"),
+        result = {
+            "platform": self.definition,
             "gpio": self.gpio_available,
             "i2c": self.i2c_available,
             "spi": self.spi_available,
             "serial": self.serial_available,
         }
+        if self.definition:
+            result["board"] = self.definition.name
+            result["cpu"] = self.definition.cpu
+            result["gpio_pins"] = len(self.definition.gpio_pins)
+
+        return result
 
     def __repr__(self):
         return f"Board(platform='{self.platform}')"
