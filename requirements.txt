@@ -1,0 +1,23 @@
+# Core (required)
+numpy>=1.24.0
+
+# Simulation
+mujoco>=3.0.0
+
+# Vision (optional — needed for stacc.ai.vision)
+opencv-python>=4.8.0
+
+# HAL — serial communication (optional — needed for stacc.hal)
+pyserial>=3.5
+
+# HAL — I2C (optional — needed on RPi/Jetson)
+smbus2>=0.4.0
+
+# RL training (optional — needed for stacc.sim.gym_env)
+gymnasium>=0.29.0
+
+# Speech (optional — needed for stacc.ai.nlp speech interface)
+SpeechRecognition>=3.10.0
+
+# SSH deploy (optional — needed for stacc.hal.deploy)
+paramiko>=3.0.0
