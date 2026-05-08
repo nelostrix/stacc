@@ -1,45 +1,57 @@
-name: nil-stacc — Build, Test & Deploy
+name: stacc CI/CD
 
 on:
     push:
-        tags:
-            - "v*"
+        branches: [main, develop, shobhit]
+        tags: ["v*"]
+    pull_request:
+        branches: [main]
     workflow_dispatch:
-    repository_dispatch:
-        types: [stacc-updated, nil-updated] # triggered by other repos
 
 jobs:
+    # ═══════════════════════════════════════
+    # TEST — all platforms, all Python versions
+    # ═══════════════════════════════════════
     test:
-        runs-on: ubuntu-latest
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, macos-latest, windows-latest]
+                python-version: ["3.9", "3.10", "3.11", "3.12"]
         steps:
             - uses: actions/checkout@v4
 
             - uses: actions/setup-python@v5
               with:
-                  python-version: "3.10"
+                  python-version: ${{ matrix.python-version }}
 
             - name: Install dependencies
               run: |
-                  pip install pytest numpy
-                  # Download latest stacc and nil-sdk from R2 to test compatibility
-                  pip install awscli
-                  aws s3 cp s3://nelo-packages/stacc/ /tmp/wheels/ --recursive \
-                    --endpoint-url https://${{ secrets.CF_ACCOUNT_ID }}.r2.cloudflarestorage.com || true
-                  aws s3 cp s3://nelo-packages/nil-sdk/ /tmp/wheels/ --recursive \
-                    --endpoint-url https://${{ secrets.CF_ACCOUNT_ID }}.r2.cloudflarestorage.com || true
-                  pip install /tmp/wheels/*.whl 2>/dev/null || true
+                  python -m pip install --upgrade pip
+                  pip install numpy mujoco pytest
                   pip install -e .
-              env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_KEY }}
 
-            - name: Run tests
-              run: pytest tests/ -v || echo "Tests completed"
+            - name: Run core tests
+              run: pytest tests/test_core.py -v --tb=short
 
-    build-and-deploy:
-        needs: test
+            - name: Run CLI tests
+              run: pytest tests/test_cli.py -v --tb=short
+
+            - name: Run sensor tests
+              run: python tests/test_all_sensors.py
+
+            - name: Run AI tests
+              run: python tests/test_ai.py || true
+
+            - name: Run master tests
+              run: python tests/test_master.py
+
+    # ═══════════════════════════════════════
+    # LINT — code quality
+    # ═══════════════════════════════════════
+    lint:
         runs-on: ubuntu-latest
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'repository_dispatch'
         steps:
             - uses: actions/checkout@v4
 
@@ -47,19 +59,70 @@ jobs:
               with:
                   python-version: "3.10"
 
-            - name: Install build tools
-              run: pip install build awscli
+            - name: Lint
+              run: |
+                  pip install flake8
+                  flake8 stacc/ --max-line-length=100 --ignore=E501,W503,E402,F401
+
+    # ═══════════════════════════════════════
+    # BUILD — create wheel artifact
+    # ═══════════════════════════════════════
+    build:
+        runs-on: ubuntu-latest
+        needs: [test, lint]
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.10"
 
             - name: Build wheel
-              run: python -m build --wheel
+              run: |
+                  pip install build
+                  python -m build --wheel
 
-            - name: Upload to R2
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: stacc-wheel
+                  path: dist/*.whl
+
+    # ═══════════════════════════════════════
+    # DEPLOY — upload to R2 (only on version tags)
+    # ═══════════════════════════════════════
+    deploy:
+        runs-on: ubuntu-latest
+        needs: build
+        if: startsWith(github.ref, 'refs/tags/v')
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.10"
+
+            - name: Build wheel
+              run: |
+                  pip install build
+                  python -m build --wheel
+
+            - name: Upload to Cloudflare R2
               env:
                   AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
                   AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_KEY }}
               run: |
-                  aws s3 cp dist/*.whl s3://nelo-packages/nil-stacc/ \
+                  pip install awscli
+                  aws s3 cp dist/*.whl s3://nelo-packages/stacc/ \
                     --endpoint-url https://${{ secrets.CF_ACCOUNT_ID }}.r2.cloudflarestorage.com
+                  echo "✓ stacc $(ls dist/*.whl) uploaded to R2"
 
-            - name: Verify upload
-              run: echo "✓ nil-stacc wheel uploaded to R2"
+            - name: Notify nil-stacc
+              if: success()
+              run: |
+                  curl -s -X POST \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    -H "Authorization: token ${{ secrets.NIL_STACC_TRIGGER_TOKEN }}" \
+                    https://api.github.com/repos/nelostrix/nil-stacc/dispatches \
+                    -d '{"event_type":"stacc-updated","client_payload":{"version":"${{ github.ref_name }}"}}'
+                  echo "✓ nil-stacc notified"
