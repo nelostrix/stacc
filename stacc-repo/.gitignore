@@ -71,3 +71,8 @@ recordings/
 .env
 .env.local
 *.pem
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
