@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+.eggs/
+develop-eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# stacc specific
+.stacc/cache/
+data/logs/
+data/recordings/
+*.urdf.bak
+*.mjcf.bak
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Build artifacts
+*.o
+*.obj
+*.exe
+*.dll
+*.dylib
+*.a
+*.lib
+
+# Node (GUI)
+gui/node_modules/
+gui/dist/
+gui/.next/
+gui/.cache/
+
+# Simulation output
+*.mp4
+*.avi
+*.bag
+recordings/
+
+# Environment
+.env
+.env.local
+*.pem
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
