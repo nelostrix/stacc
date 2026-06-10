@@ -17,10 +17,10 @@ class DifferentialDrive(Robot):
 
     Args:
         name: Robot name
-        wheel_radius: Wheel radius in meters
-        wheel_base: Distance between wheels in meters
-        max_rpm: Maximum motor RPM
-        mass: Total robot mass in kg
+        wheel_radius: Wheel radius in meters (must be > 0)
+        wheel_base: Distance between wheels in meters (must be > 0)
+        max_rpm: Maximum motor RPM (must be > 0)
+        mass: Total robot mass in kg (must be > 0)
     """
 
     def __init__(
@@ -31,13 +31,21 @@ class DifferentialDrive(Robot):
         max_rpm: int = 200,
         mass: float = 0.5,
     ):
+        if wheel_radius <= 0:
+            raise ValueError(f"wheel_radius must be > 0, got {wheel_radius}")
+        if wheel_base <= 0:
+            raise ValueError(f"wheel_base must be > 0, got {wheel_base}")
+        if max_rpm <= 0:
+            raise ValueError(f"max_rpm must be > 0, got {max_rpm}")
+        if mass <= 0:
+            raise ValueError(f"mass must be > 0, got {mass}")
+
         super().__init__(name=name)
         self.wheel_radius = wheel_radius
         self.wheel_base = wheel_base
         self.max_rpm = max_rpm
         self.max_speed = (max_rpm * 2 * math.pi * wheel_radius) / 60  # m/s
 
-        # Build kinematic structure
         body = Link(
             "body",
             mass=mass * 0.8,
@@ -75,7 +83,6 @@ class DifferentialDrive(Robot):
             origin=[0, wheel_base / 2, 0, 0, 0, 0],
         ))
 
-        # Speed state
         self._left_speed: float = 0.0
         self._right_speed: float = 0.0
 
@@ -90,6 +97,11 @@ class DifferentialDrive(Robot):
         right_vel = linear + (angular * self.wheel_base / 2)
         self._left_speed = left_vel / self.max_speed
         self._right_speed = right_vel / self.max_speed
+
+    def reset(self):
+        """Reset wheel speeds to zero."""
+        self._left_speed = 0.0
+        self._right_speed = 0.0
 
     @property
     def linear_velocity(self) -> float:
@@ -109,3 +121,9 @@ class DifferentialDrive(Robot):
     def heading(self) -> float:
         """Current heading angle in radians."""
         return self.orientation[2]
+
+    def __repr__(self) -> str:
+        return (
+            f"DifferentialDrive('{self.name}', wheel_radius={self.wheel_radius}, "
+            f"wheel_base={self.wheel_base}, max_rpm={self.max_rpm})"
+        )

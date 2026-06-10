@@ -100,6 +100,10 @@ All core commands implemented:
 - `CPGGenerator` — oscillator-based adaptive gait with 5 coupling presets
 - `FlightController` — multirotor attitude control and motor mixing
 
+### Robot Module
+- `DifferentialDrive` — 2-wheel mobile robot with speed, velocity, and heading control
+- `SerialManipulator` — N-DOF arm with FK, IK, Jacobian via DH parameters
+
 ### AI Module
 - `EKFSLAM`, `ParticleFilterSLAM` — full implementations with motion/update/resample
 - `ICPMatcher` — scan-to-scan matching with SVD
@@ -115,8 +119,7 @@ All core commands implemented:
 
 ## Coming Soon
 
-- Core robot model (joints, links, URDF parsing)
-- Kinematics engine (FK, IK, dynamics)
+- URDF parsing / serialization
 - MuJoCo simulation backend
 - Hardware abstraction layer
 - Sensor simulation
@@ -131,8 +134,8 @@ All core commands implemented:
 - [x] Gait module — generators for all legged gaits + CPG + flight controller
 - [x] Gripper module — parallel, vacuum, soft, magnetic, dexterous end effectors
 - [x] HAL module — board detection, GPIO, I2C, SPI, serial, motor/servo drivers, deploy
-- [ ] Core robot model (joints, links, URDF)
-- [ ] Kinematics engine (FK, IK, dynamics)
+- [x] Core robot model — DifferentialDrive, SerialManipulator, Robot base, Joint, Link
+- [x] Kinematics engine (FK, IK, trajectory generation)
 - [ ] MuJoCo simulation backend
 - [ ] Hardware abstraction layer
 - [ ] Sensor simulation

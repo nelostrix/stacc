@@ -1,6 +1,21 @@
 # Changelog
 
-## 2026-06-10 — hal module overhaul + gait/gripper/control/ai improvements
+## 2026-06-10 — hal + gait + gripper + robot + control/ai improvements
+
+### `stacc.robot` — Full module overhaul
+
+**`differential_drive.py`** — `DifferentialDrive` class:
+- Added input validation on all constructor args (`wheel_radius > 0`, `wheel_base > 0`, `max_rpm > 0`, `mass > 0`)
+- Added `reset()` method to zero both wheel speeds
+- Added `__repr__()` with key dimensions
+
+**`serial_manipulator.py`** — `SerialManipulator` class:
+- Added input validation: `dh_parameters` type-checked as list of `DH` objects, `joint_limits` length/ordering validated
+- Added `reset()` method to zero all joint positions
+- Added `__repr__()` with joint count and parameter info
+- Empty DH list is valid (zero-joint arm)
+
+### `stacc.control` — Major expansions
 
 ### `stacc.control` — Major expansions
 

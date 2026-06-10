@@ -27,13 +27,31 @@ class SerialManipulator(Robot):
         dh_parameters: Optional[List[DH]] = None,
         joint_limits: Optional[List[Tuple[float, float]]] = None,
     ):
+        if dh_parameters is None:
+            dh_parameters = []
+        elif not isinstance(dh_parameters, list) or not all(
+            isinstance(p, DH) for p in dh_parameters
+        ):
+            raise TypeError("dh_parameters must be a list of DH objects")
+
+        if joint_limits is not None:
+            if len(joint_limits) != len(dh_parameters):
+                raise ValueError(
+                    f"joint_limits length ({len(joint_limits)}) must match "
+                    f"dh_parameters length ({len(dh_parameters)})"
+                )
+            for i, (lo, hi) in enumerate(joint_limits):
+                if lo >= hi:
+                    raise ValueError(
+                        f"joint_limits[{i}]: lower bound ({lo}) must be < upper bound ({hi})"
+                    )
+
         super().__init__(name=name)
-        self.dh_parameters = dh_parameters or []
+        self.dh_parameters = dh_parameters
         self.joint_limits = joint_limits
 
-        # Build joints from DH parameters
         for i, dh in enumerate(self.dh_parameters):
-            limits = joint_limits[i] if joint_limits and i < len(joint_limits) else None
+            limits = joint_limits[i] if joint_limits else None
             joint = Joint(
                 name=f"joint_{i + 1}",
                 type="revolute",
@@ -47,6 +65,10 @@ class SerialManipulator(Robot):
     @property
     def n_joints(self) -> int:
         return len(self.dh_parameters)
+
+    def reset(self):
+        """Reset all joint positions to zero."""
+        self.set_joint_positions([0.0] * self.n_joints)
 
     def forward_kinematics(self, joint_angles: Optional[List[float]] = None):
         """Compute end-effector pose from current or given joint angles."""
@@ -93,3 +115,9 @@ class SerialManipulator(Robot):
         from stacc.kinematics.forward import jacobian
         angles = joint_angles or self.get_joint_positions()
         return jacobian(self.dh_parameters, angles)
+
+    def __repr__(self) -> str:
+        return (
+            f"SerialManipulator('{self.name}', n_joints={self.n_joints}, "
+            f"dh_parameters={len(self.dh_parameters)} params)"
+        )
