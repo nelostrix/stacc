@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # ══════════════════════════════════════════
 # GPIO
@@ -35,16 +35,19 @@ class GPIO:
 
     def __init__(self, simulation: bool = False):
         self.simulation = simulation
-        self._backend = None
+        self._backend: Optional[str] = None
         self._pin_states: Dict[int, int] = {}
         self._pin_modes: Dict[int, str] = {}
 
         if not simulation:
             self._backend = self._detect_backend()
 
-    def _detect_backend(self) -> Optional[str]:
+    # ── Backend detection ────────────────
+
+    @staticmethod
+    def _detect_backend() -> Optional[str]:
         try:
-            import RPi.GPIO as rpi_gpio
+            import RPi.GPIO as rpi_gpio  # noqa: F401
 
             rpi_gpio.setmode(rpi_gpio.BCM)
             rpi_gpio.setwarnings(False)
@@ -52,21 +55,30 @@ class GPIO:
         except ImportError:
             pass
         try:
-            import Jetson.GPIO as jetson_gpio
+            import Jetson.GPIO as jetson_gpio  # noqa: F401
 
             jetson_gpio.setmode(jetson_gpio.BCM)
             return "jetson"
         except ImportError:
             pass
         try:
-            import gpiod
+            import gpiod  # noqa: F401
 
             return "gpiod"
         except ImportError:
             pass
         return None
 
-    def setup(self, pin: int, mode: str, pull: str = "none"):
+    # ── Public API ──────────────────────
+
+    def setup(self, pin: int, mode: str, pull: str = "none") -> None:
+        """Configure a GPIO pin.
+
+        Args:
+            pin: Pin number (BCM numbering)
+            mode: GPIO.OUTPUT or GPIO.INPUT
+            pull: GPIO.PULL_UP, GPIO.PULL_DOWN, or GPIO.PULL_NONE
+        """
         self._pin_modes[pin] = mode
         self._pin_states[pin] = 0
 
@@ -84,7 +96,13 @@ class GPIO:
             else:
                 rpi_gpio.setup(pin, direction)
 
-    def write(self, pin: int, value: int):
+    def write(self, pin: int, value: int) -> None:
+        """Set a GPIO pin HIGH or LOW.
+
+        Args:
+            pin: Pin number
+            value: GPIO.HIGH (1) or GPIO.LOW (0)
+        """
         self._pin_states[pin] = value
         if self._backend == "rpigpio":
             import RPi.GPIO as rpi_gpio
@@ -92,6 +110,14 @@ class GPIO:
             rpi_gpio.output(pin, value)
 
     def read(self, pin: int) -> int:
+        """Read the current value of a GPIO pin.
+
+        Args:
+            pin: Pin number
+
+        Returns:
+            GPIO.HIGH (1) or GPIO.LOW (0)
+        """
         if self._backend == "rpigpio":
             import RPi.GPIO as rpi_gpio
 
@@ -100,8 +126,19 @@ class GPIO:
             return val
         return self._pin_states.get(pin, 0)
 
-    def pwm_start(self, pin: int, frequency: float = 1000, duty_cycle: float = 0.0):
-        """Start PWM on a pin. duty_cycle: 0-100."""
+    def pwm_start(
+        self, pin: int, frequency: float = 1000, duty_cycle: float = 0.0
+    ) -> Any:
+        """Start PWM on a pin.
+
+        Args:
+            pin: Pin number
+            frequency: PWM frequency in Hz (default 1000)
+            duty_cycle: Duty cycle 0-100 (default 0)
+
+        Returns:
+            PWM object, or None in simulation mode
+        """
         if self._backend == "rpigpio":
             import RPi.GPIO as rpi_gpio
 
@@ -111,8 +148,15 @@ class GPIO:
             return pwm
         return None
 
-    def cleanup(self):
+    def cleanup(self) -> None:
+        """Clean up GPIO resources. Call on shutdown."""
         if self._backend == "rpigpio":
             import RPi.GPIO as rpi_gpio
 
             rpi_gpio.cleanup()
+        self._pin_states.clear()
+        self._pin_modes.clear()
+
+    def __repr__(self) -> str:
+        backend = self._backend or "simulation" if self.simulation else "none"
+        return f"GPIO(backend={backend!r}, pins={len(self._pin_states)})"

@@ -28,8 +28,7 @@ Communication protocols:
 
 Usage:
     from stacc.hal.boards import get_board, list_boards
-    from stacc.hal.protocols import I2CDevice, SPIDevice, CANBus
-    from stacc.hal.firmware import FirmwareUploader
+    from stacc.hal import I2CBus, SPIBus
 
     board = get_board("raspberry_pi_4")
     print(board.gpio_pins)
@@ -39,7 +38,7 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 # ══════════════════════════════════════════
 # BOARD DEFINITIONS
@@ -47,7 +46,30 @@ from typing import Any, Dict, List, Optional
 
 
 class BoardDefinition:
-    """Hardware board specification."""
+    """Hardware board specification.
+
+    Args:
+        name: Human-readable board name
+        platform: Platform identifier (e.g. "raspberry_pi", "arduino")
+        architecture: CPU architecture (e.g. "ARM64", "AVR")
+        cpu: CPU model name
+        clock_mhz: CPU clock speed in MHz
+        ram_kb: RAM size in KB
+        flash_kb: Flash storage size in KB
+        gpio_pins: Available GPIO pin numbers
+        pwm_pins: PWM-capable pin numbers
+        adc_pins: ADC-capable pin numbers
+        i2c_buses: I2C bus descriptions
+        spi_buses: SPI bus descriptions
+        uart_ports: UART port descriptions
+        voltage: Logic voltage level (default 3.3)
+        has_wifi: Whether board has WiFi (default False)
+        has_bluetooth: Whether board has Bluetooth (default False)
+        has_can: Whether board has CAN bus (default False)
+        has_usb: Whether board has USB (default True)
+        upload_method: Firmware upload method identifier
+        notes: Additional notes about the board
+    """
 
     def __init__(
         self,
@@ -94,28 +116,35 @@ class BoardDefinition:
         self.notes = notes
 
     def supports_protocol(self, protocol: str) -> bool:
-        protocol = protocol.lower()
-        if protocol == "gpio":
+        """Check whether this board supports a given protocol.
+
+        Args:
+            protocol: One of ``gpio``, ``pwm``, ``adc``, ``i2c``, ``spi``,
+                      ``uart`` / ``serial``, ``can``, ``wifi``, ``bluetooth``
+        """
+        p = protocol.lower()
+        if p == "gpio":
             return len(self.gpio_pins) > 0
-        elif protocol == "pwm":
+        if p == "pwm":
             return len(self.pwm_pins) > 0
-        elif protocol == "adc":
+        if p == "adc":
             return len(self.adc_pins) > 0
-        elif protocol == "i2c":
+        if p == "i2c":
             return len(self.i2c_buses) > 0
-        elif protocol == "spi":
+        if p == "spi":
             return len(self.spi_buses) > 0
-        elif protocol in ("uart", "serial"):
+        if p in ("uart", "serial"):
             return len(self.uart_ports) > 0
-        elif protocol == "can":
+        if p == "can":
             return self.has_can
-        elif protocol == "wifi":
+        if p == "wifi":
             return self.has_wifi
-        elif protocol == "bluetooth":
+        if p == "bluetooth":
             return self.has_bluetooth
         return False
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize board definition to a dictionary."""
         return {
             "name": self.name,
             "platform": self.platform,
@@ -136,8 +165,11 @@ class BoardDefinition:
             "can": self.has_can,
         }
 
-    def __repr__(self):
-        return f"Board('{self.name}', {self.cpu}, {self.ram_kb}KB RAM)"
+    def __repr__(self) -> str:
+        return (
+            f"Board('{self.name}', {self.cpu}, "
+            f"{self.ram_kb}KB RAM, {self.flash_kb}KB flash)"
+        )
 
 
 # ══════════════════════════════════════════
@@ -147,9 +179,9 @@ class BoardDefinition:
 BOARDS: Dict[str, BoardDefinition] = {}
 
 
-def _register(board: BoardDefinition):
+def _register(board: BoardDefinition) -> None:
+    """Register a board definition with automatic alias creation."""
     BOARDS[board.name] = board
-    # Also register aliases
     for alias in [
         board.name.lower(),
         board.name.replace(" ", "_").lower(),
@@ -172,7 +204,7 @@ _register(
         flash_kb=0,
         gpio_pins=list(range(2, 28)),
         pwm_pins=[12, 13, 18, 19],
-        adc_pins=[],  # no native ADC, use MCP3008 via SPI
+        adc_pins=[],
         i2c_buses=[{"bus": 1, "sda": 2, "scl": 3}],
         spi_buses=[{"bus": 0, "mosi": 10, "miso": 9, "sclk": 11, "cs": [8, 7]}],
         uart_ports=[{"port": "/dev/ttyS0", "tx": 14, "rx": 15}],
@@ -238,7 +270,7 @@ _register(
         ram_kb=264,
         flash_kb=2048,
         gpio_pins=list(range(0, 29)),
-        pwm_pins=list(range(0, 29)),  # all GPIO support PWM
+        pwm_pins=list(range(0, 29)),
         adc_pins=[26, 27, 28],
         i2c_buses=[{"bus": 0, "sda": 0, "scl": 1}, {"bus": 1, "sda": 2, "scl": 3}],
         spi_buses=[{"bus": 0, "mosi": 19, "miso": 16, "sclk": 18, "cs": [17]}],
@@ -286,8 +318,8 @@ _register(
         flash_kb=32,
         gpio_pins=list(range(0, 14)) + list(range(14, 20)),
         pwm_pins=[3, 5, 6, 9, 10, 11],
-        adc_pins=[14, 15, 16, 17, 18, 19],  # A0-A5
-        i2c_buses=[{"bus": 0, "sda": 18, "scl": 19}],  # A4, A5
+        adc_pins=[14, 15, 16, 17, 18, 19],
+        i2c_buses=[{"bus": 0, "sda": 18, "scl": 19}],
         spi_buses=[{"bus": 0, "mosi": 11, "miso": 12, "sclk": 13, "cs": [10]}],
         uart_ports=[{"port": "/dev/ttyACM0", "tx": 1, "rx": 0}],
         voltage=5.0,
@@ -307,7 +339,7 @@ _register(
         flash_kb=256,
         gpio_pins=list(range(0, 54)),
         pwm_pins=[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 44, 45, 46],
-        adc_pins=list(range(54, 70)),  # A0-A15
+        adc_pins=list(range(54, 70)),
         i2c_buses=[{"bus": 0, "sda": 20, "scl": 21}],
         spi_buses=[{"bus": 0, "mosi": 51, "miso": 50, "sclk": 52, "cs": [53]}],
         uart_ports=[
@@ -379,30 +411,8 @@ _register(
         ram_kb=520,
         flash_kb=4096,
         gpio_pins=[
-            0,
-            2,
-            4,
-            5,
-            12,
-            13,
-            14,
-            15,
-            16,
-            17,
-            18,
-            19,
-            21,
-            22,
-            23,
-            25,
-            26,
-            27,
-            32,
-            33,
-            34,
-            35,
-            36,
-            39,
+            0, 2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19,
+            21, 22, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39,
         ],
         pwm_pins=[0, 2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27],
         adc_pins=[32, 33, 34, 35, 36, 39, 25, 26, 27, 14, 12, 13, 15, 2, 0, 4],
@@ -455,7 +465,7 @@ _register(
         flash_kb=4096,
         gpio_pins=[0, 2, 4, 5, 12, 13, 14, 15, 16],
         pwm_pins=[0, 2, 4, 5, 12, 13, 14, 15],
-        adc_pins=[17],  # single ADC (A0)
+        adc_pins=[17],
         i2c_buses=[{"bus": 0, "sda": 4, "scl": 5}],
         spi_buses=[{"bus": 0, "mosi": 13, "miso": 12, "sclk": 14, "cs": [15]}],
         uart_ports=[{"port": "/dev/ttyUSB0", "tx": 1, "rx": 3}],
@@ -476,15 +486,15 @@ _register(
         clock_mhz=72,
         ram_kb=20,
         flash_kb=64,
-        gpio_pins=list(range(0, 37)),  # PA0-PA15, PB0-PB15, PC13-PC15
-        pwm_pins=[0, 1, 2, 3, 6, 7, 8, 9],  # TIM1-TIM4 channels
+        gpio_pins=list(range(0, 37)),
+        pwm_pins=[0, 1, 2, 3, 6, 7, 8, 9],
         adc_pins=[0, 1, 2, 3, 4, 5, 6, 7, 16, 17],
         i2c_buses=[
             {"bus": 1, "sda": "PB7", "scl": "PB6"},
             {"bus": 2, "sda": "PB11", "scl": "PB10"},
         ],
         spi_buses=[
-            {"bus": 1, "mosi": "PA7", "miso": "PA6", "sclk": "PA5", "cs": ["PA4"]}
+            {"bus": 1, "mosi": "PA7", "miso": "PA6", "sclk": "PA5", "cs": ["PA4"]},
         ],
         uart_ports=[
             {"port": "USART1", "tx": "PA9", "rx": "PA10"},
@@ -555,28 +565,8 @@ _register(
         ram_kb=4 * 1024 * 1024,
         flash_kb=0,
         gpio_pins=[
-            7,
-            11,
-            12,
-            13,
-            15,
-            16,
-            18,
-            19,
-            21,
-            22,
-            23,
-            24,
-            26,
-            29,
-            31,
-            32,
-            33,
-            35,
-            36,
-            37,
-            38,
-            40,
+            7, 11, 12, 13, 15, 16, 18, 19, 21, 22,
+            23, 24, 26, 29, 31, 32, 33, 35, 36, 37, 38, 40,
         ],
         pwm_pins=[32, 33],
         adc_pins=[],
@@ -695,14 +685,19 @@ _register(
 
 
 def get_board(name: str) -> Optional[BoardDefinition]:
-    """Look up a board by name (case-insensitive, fuzzy match)."""
+    """Look up a board by name (case-insensitive, fuzzy match).
+
+    Args:
+        name: Board name or alias
+
+    Returns:
+        BoardDefinition if found, else None
+    """
     key = name.lower().replace("-", " ").replace("_", " ").strip()
 
-    # Exact match
     if key in BOARDS:
         return BOARDS[key]
 
-    # Fuzzy match
     for bname, board in BOARDS.items():
         if key in bname.lower() or bname.lower() in key:
             return board
@@ -711,9 +706,13 @@ def get_board(name: str) -> Optional[BoardDefinition]:
 
 
 def list_boards() -> List[BoardDefinition]:
-    """List all supported boards (deduplicated)."""
-    seen = set()
-    boards = []
+    """List all supported boards (deduplicated).
+
+    Returns:
+        Sorted list of unique BoardDefinition objects
+    """
+    seen: Set[str] = set()
+    boards: List[BoardDefinition] = []
     for board in BOARDS.values():
         if board.name not in seen:
             seen.add(board.name)
@@ -722,7 +721,11 @@ def list_boards() -> List[BoardDefinition]:
 
 
 def list_platforms() -> List[str]:
-    """List all supported platforms."""
+    """List all supported platform identifiers.
+
+    Returns:
+        Sorted list of platform names
+    """
     return sorted(set(b.platform for b in BOARDS.values()))
 
 
@@ -741,7 +744,7 @@ class FirmwareUploader:
         uploader.upload("firmware.hex")
     """
 
-    UPLOAD_COMMANDS = {
+    UPLOAD_COMMANDS: Dict[str, str] = {
         "avrdude": "avrdude -p {mcu} -c arduino -P {port} -b {baud} -U flash:w:{firmware}:i",
         "esptool": "esptool.py --chip {chip} --port {port} --baud {baud} write_flash 0x0 {firmware}",
         "stlink": "st-flash write {firmware} 0x08000000",
@@ -753,7 +756,10 @@ class FirmwareUploader:
     }
 
     def __init__(
-        self, board: str = "arduino_uno", port: str = "/dev/ttyACM0", baud: int = 115200
+        self,
+        board: str = "arduino_uno",
+        port: str = "/dev/ttyACM0",
+        baud: int = 115200,
     ):
         self.board_def = get_board(board)
         self.port = port
@@ -761,14 +767,20 @@ class FirmwareUploader:
 
         if self.board_def is None:
             raise ValueError(
-                f"Unknown board: {board}. Use list_boards() to see available."
+                f"Unknown board: {board!r}. Use list_boards() to see available."
             )
 
     def get_upload_command(self, firmware_path: str) -> str:
+        """Generate the shell command for firmware upload.
+
+        Args:
+            firmware_path: Path to the firmware file
+
+        Returns:
+            Shell command string
+        """
         method = self.board_def.upload_method
-        template = self.UPLOAD_COMMANDS.get(
-            method, "echo 'No upload method for {board}'"
-        )
+        template = self.UPLOAD_COMMANDS.get(method, "echo 'No upload method for {board}'")
         return template.format(
             firmware=firmware_path,
             port=self.port,
@@ -782,6 +794,15 @@ class FirmwareUploader:
         )
 
     def upload(self, firmware_path: str, dry_run: bool = False) -> bool:
+        """Upload firmware to the board.
+
+        Args:
+            firmware_path: Path to compiled firmware file
+            dry_run: If True, print command without executing
+
+        Returns:
+            True if upload succeeded
+        """
         import subprocess
 
         cmd = self.get_upload_command(firmware_path)
@@ -796,7 +817,7 @@ class FirmwareUploader:
                 cmd, shell=True, capture_output=True, text=True, timeout=60
             )
             if result.returncode == 0:
-                print(f"  [firmware] Upload successful")
+                print("  [firmware] Upload successful")
                 return True
             else:
                 print(f"  [firmware] Upload failed: {result.stderr}")
@@ -804,3 +825,9 @@ class FirmwareUploader:
         except Exception as e:
             print(f"  [firmware] Error: {e}")
             return False
+
+    def __repr__(self) -> str:
+        return (
+            f"FirmwareUploader(board={self.board_def.name!r}, "
+            f"method={self.board_def.upload_method!r})"
+        )

@@ -72,6 +72,18 @@ All core commands implemented:
 - `SCurveProfile` — jerk-limited trajectory generation
 - `ControllerPipeline` with named `ControllerStage`s, enable/disable, conditional skip
 
+### HAL Module
+- `Board` — auto-detect platform (RPi, Jetson, desktop) with `Board.detect()`
+- `BoardDefinition` — 18 board specs across 9 platforms with full pin mappings
+- `FirmwareUploader` — firmware upload via avrdude, esptool, stlink, bossac, UF2, SSH
+- `GPIO` — universal GPIO with RPi.GPIO / Jetson.GPIO / gpiod / simulation backends
+- `I2CBus` — universal I2C via smbus2 with device scanning
+- `SPIBus` — universal SPI via spidev with full-duplex transfer
+- `SerialPort` — universal UART/serial via pyserial
+- `MotorDriver` — DC motor control via H-bridge (L298N) with PWM
+- `ServoDriver` — standard hobby servo control with angle-to-pulse mapping
+- `Deployer` — SSH-based project deployment to remote robots
+
 ### Gripper Module
 - `Gripper` base class with open/close/stop/reset state machine and grasp detection
 - `ParallelGripper` — parallel jaw with configurable width, force, speed
@@ -118,6 +130,7 @@ All core commands implemented:
 - [x] AI module — SLAM, path planning, behavior trees, NLP, vision
 - [x] Gait module — generators for all legged gaits + CPG + flight controller
 - [x] Gripper module — parallel, vacuum, soft, magnetic, dexterous end effectors
+- [x] HAL module — board detection, GPIO, I2C, SPI, serial, motor/servo drivers, deploy
 - [ ] Core robot model (joints, links, URDF)
 - [ ] Kinematics engine (FK, IK, dynamics)
 - [ ] MuJoCo simulation backend

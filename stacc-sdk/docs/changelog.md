@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-06-10 — gait module overhaul + gripper module overhaul + control/ai improvements
+## 2026-06-10 — hal module overhaul + gait/gripper/control/ai improvements
 
 ### `stacc.control` — Major expansions
 
@@ -65,6 +65,59 @@
 - Input validation on `num_rotors`
 - Mixing matrix construction extracted to `_build_mixing_matrix()` static method
 - Cleaned up type hints and docstrings
+
+### `stacc.hal` — Full module overhaul
+
+**`__init__.py`** — Properly exports all classes with documented usage:
+- `Board`, `BoardDefinition`, `FirmwareUploader`, `get_board`, `list_boards`, `list_platforms`
+- `Deployer`, `GPIO`, `I2CBus`, `MotorDriver`, `ServoDriver`, `SerialPort`, `SPIBus`
+
+**`board.py`** — `Board` class:
+- Fixed bug in `info()` where `result["platform"]` was incorrectly set to `self.definition` instead of `self.platform`
+- Added `reset()` method to clear detection state for re-detection
+- Added `__repr__()` with readable state
+
+**`boards.py`** — Board database + firmware uploader:
+- Added `__repr__()` on `FirmwareUploader` class
+- `get_board()`, `list_boards()`, `list_platforms()` now have proper return-type annotations and docstrings
+- Board database already covers 18 boards across 9 platforms — unchanged
+
+**`deploy.py`** — `Deployer` class:
+- Added context manager support (`__enter__` / `__exit__`) for `with` statement usage
+- Added validation: `host` must not be empty (raises `ValueError`)
+- Added `__repr__()` with host/user/port info
+- `upload()` now returns `None` and prints a message when not connected
+
+**`gpio.py`** — `GPIO` class:
+- Backend detection extracted to `@staticmethod` (was inline in `__init__`)
+- Added `__repr__()` showing backend and active pin count
+- Added return-type annotations
+- `cleanup()` now clears internal pin state dictionaries
+
+**`i2c.py`** — `I2CBus` class:
+- Added context manager support (`__enter__` / `__exit__`)
+- Added input validation: `bus_number >= 0`
+- Added `__repr__()` with bus number and open status
+- All methods now have proper docstrings and type annotations
+- `close()` sets `_bus = None` for clean re-open
+
+**`motor.py`** — `MotorDriver` and `ServoDriver`:
+- Added `__repr__()` on both classes
+- Added `ServoDriver.reset()` to return servo to center (90°)
+- Added type annotations on all methods
+- `set_speed()` and `set_angle()` docstrings now document clamping behavior
+
+**`serial_comm.py`** — `SerialPort` class:
+- Added context manager support (`__enter__` / `__exit__`)
+- Added input validation: `baudrate > 0`, `timeout >= 0`
+- Added `__repr__()` with port, baudrate, and open status
+- `close()` sets `_serial = None` for clean re-open
+
+**`spi.py`** — `SPIBus` class:
+- Added context manager support (`__enter__` / `__exit__`)
+- Added input validation: `bus >= 0`, `device >= 0`, `speed > 0`, `mode` in 0–3
+- Added `__repr__()` with bus/device/speed/mode and open status
+- All methods now have docstrings and type annotations
 
 ### `stacc.gripper` — Full module overhaul
 
