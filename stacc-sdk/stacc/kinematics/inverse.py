@@ -17,6 +17,7 @@ except ImportError:
 from stacc.kinematics.transforms import DH
 from stacc.kinematics.forward import (
     forward_kinematics_dh,
+    forward_kinematics_chain,
     end_effector_position,
     jacobian,
 )
@@ -26,11 +27,12 @@ class InverseKinematics:
     """IK solver for serial manipulators.
 
     Args:
-        robot: Robot or list of DH parameters
-        method: "damped_least_squares" (default), "jacobian_transpose", or "ccd"
-        max_iterations: Maximum solver iterations
-        tolerance: Position error tolerance in meters
-        damping: Damping factor for DLS method (lambda)
+        robot: Robot object with ``dh_parameters`` attribute (optional)
+        dh_params: List of DH parameters (alternative to ``robot``)
+        method: ``"damped_least_squares"`` (default), ``"jacobian_transpose"``, or ``"ccd"``
+        max_iterations: Maximum solver iterations (default 100)
+        tolerance: Position error tolerance in meters (default 1e-3)
+        damping: Damping factor for DLS method (default 0.1)
     """
 
     METHODS = ("damped_least_squares", "jacobian_transpose", "ccd")
@@ -45,14 +47,18 @@ class InverseKinematics:
         damping: float = 0.1,
     ):
         if method not in self.METHODS:
-            raise ValueError(f"Unknown IK method '{method}'. Use one of {self.METHODS}")
+            raise ValueError(
+                f"Unknown IK method '{method}'. Use one of {self.METHODS}"
+            )
 
         if dh_params is not None:
             self.dh_params = dh_params
         elif robot is not None and hasattr(robot, "dh_parameters"):
             self.dh_params = robot.dh_parameters
         else:
-            raise ValueError("Provide either robot with dh_parameters or dh_params directly")
+            raise ValueError(
+                "Provide either robot with dh_parameters or dh_params directly"
+            )
 
         self.method = method
         self.max_iterations = max_iterations
@@ -71,8 +77,8 @@ class InverseKinematics:
 
         Args:
             target_position: Desired [x, y, z] position in meters
-            orientation: Optional orientation hint ("top_down", "horizontal", etc.)
-            initial_guess: Starting joint angles (default: zeros)
+            orientation: Optional orientation hint (``"top_down"``, ``"horizontal"``, etc.)
+            initial_guess: Starting joint angles (default: all zeros)
             joint_limits: List of (min, max) per joint
 
         Returns:
@@ -82,7 +88,10 @@ class InverseKinematics:
             raise ImportError("numpy required for IK")
 
         target = np.array(target_position, dtype=float)
-        q = np.array(initial_guess if initial_guess else [0.0] * self.n_joints, dtype=float)
+        q = np.array(
+            initial_guess if initial_guess is not None else [0.0] * self.n_joints,
+            dtype=float,
+        )
 
         if self.method == "damped_least_squares":
             q = self._solve_dls(target, q, joint_limits)
@@ -102,7 +111,7 @@ class InverseKinematics:
         """Damped Least Squares (Levenberg-Marquardt)."""
         lam = self.damping
 
-        for iteration in range(self.max_iterations):
+        for _ in range(self.max_iterations):
             current_pos = end_effector_position(self.dh_params, q.tolist())
             error = target - current_pos
             err_norm = np.linalg.norm(error)
@@ -111,7 +120,7 @@ class InverseKinematics:
                 break
 
             J = jacobian(self.dh_params, q.tolist())
-            J_pos = J[:3, :]  # only position rows
+            J_pos = J[:3, :]
 
             # DLS: dq = J^T (J J^T + λ²I)^{-1} e
             JJT = J_pos @ J_pos.T
@@ -119,7 +128,6 @@ class InverseKinematics:
 
             q = q + dq
 
-            # Clamp to limits
             if limits:
                 for i, (lo, hi) in enumerate(limits):
                     q[i] = max(lo, min(hi, q[i]))
@@ -133,9 +141,9 @@ class InverseKinematics:
         limits: Optional[List[Tuple[float, float]]],
     ) -> "np.ndarray":
         """Jacobian Transpose method (simpler, slower convergence)."""
-        alpha = 0.1  # step size
+        alpha = 0.1
 
-        for iteration in range(self.max_iterations):
+        for _ in range(self.max_iterations):
             current_pos = end_effector_position(self.dh_params, q.tolist())
             error = target - current_pos
 
@@ -161,24 +169,17 @@ class InverseKinematics:
         limits: Optional[List[Tuple[float, float]]],
     ) -> "np.ndarray":
         """Cyclic Coordinate Descent — iteratively rotates each joint toward target."""
-        from stacc.kinematics.forward import forward_kinematics_chain
-
-        for iteration in range(self.max_iterations):
+        for _ in range(self.max_iterations):
             current_pos = end_effector_position(self.dh_params, q.tolist())
             if np.linalg.norm(target - current_pos) < self.tolerance:
                 break
 
-            # Iterate joints from tip to base
             for i in range(self.n_joints - 1, -1, -1):
                 frames = forward_kinematics_chain(self.dh_params, q.tolist())
                 ee_pos = frames[-1][:3, 3]
 
-                if i == 0:
-                    joint_pos = np.zeros(3)
-                else:
-                    joint_pos = frames[i - 1][:3, 3]
+                joint_pos = np.zeros(3) if i == 0 else frames[i - 1][:3, 3]
 
-                # Vectors from joint to EE and joint to target
                 to_ee = ee_pos - joint_pos
                 to_target = target - joint_pos
 
@@ -191,17 +192,13 @@ class InverseKinematics:
                 to_ee = to_ee / to_ee_norm
                 to_target = to_target / to_target_norm
 
-                cos_angle = np.clip(np.dot(to_ee, to_target), -1, 1)
+                cos_angle = np.clip(np.dot(to_ee, to_target), -1.0, 1.0)
                 angle = math.acos(cos_angle)
 
                 cross = np.cross(to_ee, to_target)
                 if np.linalg.norm(cross) > 1e-10:
-                    # Determine sign from cross product
-                    if i == 0:
-                        z_axis = np.array([0, 0, 1])
-                    else:
-                        z_axis = frames[i - 1][:3, 2]
-                    sign = 1 if np.dot(cross, z_axis) > 0 else -1
+                    z_axis = np.array([0, 0, 1]) if i == 0 else frames[i - 1][:3, 2]
+                    sign = 1.0 if np.dot(cross, z_axis) > 0 else -1.0
                     q[i] += sign * angle
 
                 if limits:
@@ -209,3 +206,11 @@ class InverseKinematics:
                     q[i] = max(lo, min(hi, q[i]))
 
         return q
+
+    def __repr__(self) -> str:
+        return (
+            f"InverseKinematics("
+            f"method={self.method!r}, "
+            f"joints={self.n_joints}, "
+            f"tolerance={self.tolerance})"
+        )

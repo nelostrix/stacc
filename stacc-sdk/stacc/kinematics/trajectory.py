@@ -8,19 +8,17 @@ at any time t.
 Supports:
 - Quintic polynomial (5th order) — smooth pos, vel, accel at endpoints
 - Cubic polynomial (3rd order) — smooth pos, vel at endpoints
-- Minimum jerk — minimizes jerk (derivative of acceleration) for natural motion
-- Trapezoidal velocity profile — constant acceleration/deceleration with cruise
+- Minimum jerk — minimizes jerk for natural motion
+- Trapezoidal velocity profile — constant accel/decel with cruise
 - Linear interpolation — simplest, for non-critical moves
 - Multi-waypoint paths — chain segments through a sequence of configurations
-- Time-optimal scaling — respect joint velocity and acceleration limits
 
 Usage:
-    from stacc.kinematics.trajectory import QuinticTrajectory, MinJerkTrajectory
-    from stacc.kinematics.trajectory import WaypointPath, TrapezoidalProfile
+    from stacc.kinematics.trajectory import QuinticTrajectory, WaypointPath, TrapezoidalProfile
 
     # Single segment: move joint from 0 to 1.5 rad in 2 seconds
     traj = QuinticTrajectory(q_start=0.0, q_end=1.5, duration=2.0)
-    pos, vel, acc = traj.evaluate(t=1.0)  # position at t=1.0s
+    pos, vel, acc = traj.evaluate(t=1.0)
 
     # Multi-joint: move 6 joints simultaneously
     traj = QuinticTrajectory(
@@ -44,19 +42,16 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Tuple, Union
 
-# Type alias: scalar or list of floats
 State = Union[float, List[float]]
 
 
 def _to_list(val: State) -> List[float]:
-    """Convert scalar or list to list."""
     if isinstance(val, (int, float)):
         return [float(val)]
     return [float(v) for v in val]
 
 
 def _scalar_or_list(vals: List[float], was_scalar: bool) -> State:
-    """Return scalar if input was scalar, else list."""
     if was_scalar and len(vals) == 1:
         return vals[0]
     return vals
@@ -91,6 +86,9 @@ class QuinticTrajectory:
         a_start: Optional[State] = None,
         a_end: Optional[State] = None,
     ):
+        if duration <= 0:
+            raise ValueError(f"duration must be > 0, got {duration}")
+
         self._scalar = isinstance(q_start, (int, float))
         self.q_start = _to_list(q_start)
         self.q_end = _to_list(q_end)
@@ -102,8 +100,7 @@ class QuinticTrajectory:
         a_start = _to_list(a_start) if a_start is not None else [0.0] * self.n
         a_end = _to_list(a_end) if a_end is not None else [0.0] * self.n
 
-        # Compute coefficients for each joint
-        self._coeffs = []  # list of (a0,a1,a2,a3,a4,a5) per joint
+        self._coeffs: List[Tuple[float, float, float, float, float, float]] = []
         T = self.T
         T2, T3, T4, T5 = T**2, T**3, T**4, T**5
 
@@ -112,44 +109,26 @@ class QuinticTrajectory:
             a1 = v_start[i]
             a2 = a_start[i] / 2.0
 
-            # Solve for a3, a4, a5 from end conditions
-            dq = self.q_end[i] - a0 - a1 * T - a2 * T2
-            dv = v_end[i] - a1 - 2 * a2 * T
-            da = a_end[i] - 2 * a2
-
-            if T3 > 1e-12:
-                a3 = (20 * dq - (8 * dv + da * T) * T - (12 * a1 + 6 * a2 * T) * T) / (
-                    2 * T3
+            if abs(T3) > 1e-15:
+                a3 = (
+                    10.0 * (self.q_end[i] - self.q_start[i]) / T3
+                    - 6.0 * v_start[i] / T2
+                    - 4.0 * v_end[i] / T2
+                    - 1.5 * a_start[i] / T
+                    + 0.5 * a_end[i] / T
                 )
-                # Re-derive properly using the full system
-                # System of equations for a3, a4, a5:
-                #   a3*T³ + a4*T⁴ + a5*T⁵ = dq
-                #   3*a3*T² + 4*a4*T³ + 5*a5*T⁴ = dv
-                #   6*a3*T + 12*a4*T² + 20*a5*T³ = da
-
-                det = T3 * (2 * T2)  # simplified
-                if abs(T3) > 1e-15:
-                    a3 = (
-                        10 * (self.q_end[i] - self.q_start[i]) / T3
-                        - 6 * v_start[i] / T2
-                        - 4 * v_end[i] / T2
-                        - 1.5 * a_start[i] / T
-                        + 0.5 * a_end[i] / T
-                    )
-                    a4 = (
-                        -15 * (self.q_end[i] - self.q_start[i]) / T4
-                        + 8 * v_start[i] / T3
-                        + 7 * v_end[i] / T3
-                        + 1.5 * a_start[i] / T2
-                        - a_end[i] / T2
-                    )
-                    a5 = (
-                        6 * (self.q_end[i] - self.q_start[i]) / T5
-                        - 3 * (v_start[i] + v_end[i]) / T4
-                        - 0.5 * (a_start[i] - a_end[i]) / T3
-                    )
-                else:
-                    a3 = a4 = a5 = 0.0
+                a4 = (
+                    -15.0 * (self.q_end[i] - self.q_start[i]) / T4
+                    + 8.0 * v_start[i] / T3
+                    + 7.0 * v_end[i] / T3
+                    + 1.5 * a_start[i] / T2
+                    - a_end[i] / T2
+                )
+                a5 = (
+                    6.0 * (self.q_end[i] - self.q_start[i]) / T5
+                    - 3.0 * (v_start[i] + v_end[i]) / T4
+                    - 0.5 * (a_start[i] - a_end[i]) / T3
+                )
             else:
                 a3 = a4 = a5 = 0.0
 
@@ -158,22 +137,22 @@ class QuinticTrajectory:
     def evaluate(self, t: float) -> Tuple[State, State, State]:
         """Evaluate trajectory at time t.
 
+        Args:
+            t: Time in seconds (clamped to [0, duration])
+
         Returns:
             (position, velocity, acceleration) — each is scalar or list
         """
         t = max(0.0, min(t, self.T))
 
-        pos, vel, acc = [], [], []
+        pos: List[float] = []
+        vel: List[float] = []
+        acc: List[float] = []
         for a0, a1, a2, a3, a4, a5 in self._coeffs:
             t2, t3, t4, t5 = t**2, t**3, t**4, t**5
-
-            p = a0 + a1 * t + a2 * t2 + a3 * t3 + a4 * t4 + a5 * t5
-            v = a1 + 2 * a2 * t + 3 * a3 * t2 + 4 * a4 * t3 + 5 * a5 * t4
-            a = 2 * a2 + 6 * a3 * t + 12 * a4 * t2 + 20 * a5 * t3
-
-            pos.append(p)
-            vel.append(v)
-            acc.append(a)
+            pos.append(a0 + a1 * t + a2 * t2 + a3 * t3 + a4 * t4 + a5 * t5)
+            vel.append(a1 + 2.0 * a2 * t + 3.0 * a3 * t2 + 4.0 * a4 * t3 + 5.0 * a5 * t4)
+            acc.append(2.0 * a2 + 6.0 * a3 * t + 12.0 * a4 * t2 + 20.0 * a5 * t3)
 
         return (
             _scalar_or_list(pos, self._scalar),
@@ -184,6 +163,9 @@ class QuinticTrajectory:
     @property
     def duration(self) -> float:
         return self.T
+
+    def __repr__(self) -> str:
+        return f"QuinticTrajectory(n={self.n}, T={self.T:.2f}s)"
 
 
 # ══════════════════════════════════════════
@@ -208,6 +190,9 @@ class CubicTrajectory:
         v_start: Optional[State] = None,
         v_end: Optional[State] = None,
     ):
+        if duration <= 0:
+            raise ValueError(f"duration must be > 0, got {duration}")
+
         self._scalar = isinstance(q_start, (int, float))
         self.q_start = _to_list(q_start)
         self.q_end = _to_list(q_end)
@@ -217,7 +202,7 @@ class CubicTrajectory:
         v_start = _to_list(v_start) if v_start is not None else [0.0] * self.n
         v_end = _to_list(v_end) if v_end is not None else [0.0] * self.n
 
-        self._coeffs = []
+        self._coeffs: List[Tuple[float, float, float, float]] = []
         T = self.T
         T2, T3 = T**2, T**3
 
@@ -227,12 +212,12 @@ class CubicTrajectory:
 
             if abs(T2) > 1e-15:
                 a2 = (
-                    3 * (self.q_end[i] - self.q_start[i]) / T2
-                    - 2 * v_start[i] / T
+                    3.0 * (self.q_end[i] - self.q_start[i]) / T2
+                    - 2.0 * v_start[i] / T
                     - v_end[i] / T
                 )
                 a3 = (
-                    -2 * (self.q_end[i] - self.q_start[i]) / T3
+                    -2.0 * (self.q_end[i] - self.q_start[i]) / T3
                     + (v_start[i] + v_end[i]) / T2
                 )
             else:
@@ -242,13 +227,15 @@ class CubicTrajectory:
 
     def evaluate(self, t: float) -> Tuple[State, State, State]:
         t = max(0.0, min(t, self.T))
-        pos, vel, acc = [], [], []
+        pos: List[float] = []
+        vel: List[float] = []
+        acc: List[float] = []
 
         for a0, a1, a2, a3 in self._coeffs:
             t2, t3 = t**2, t**3
             pos.append(a0 + a1 * t + a2 * t2 + a3 * t3)
-            vel.append(a1 + 2 * a2 * t + 3 * a3 * t2)
-            acc.append(2 * a2 + 6 * a3 * t)
+            vel.append(a1 + 2.0 * a2 * t + 3.0 * a3 * t2)
+            acc.append(2.0 * a2 + 6.0 * a3 * t)
 
         return (
             _scalar_or_list(pos, self._scalar),
@@ -259,6 +246,9 @@ class CubicTrajectory:
     @property
     def duration(self) -> float:
         return self.T
+
+    def __repr__(self) -> str:
+        return f"CubicTrajectory(n={self.n}, T={self.T:.2f}s)"
 
 
 # ══════════════════════════════════════════
@@ -272,11 +262,13 @@ class MinJerkTrajectory:
     Minimizes the integral of jerk² (derivative of acceleration).
     This is what human arm movements approximate.
 
-    q(t) = q0 + (q1-q0) * (10τ³ - 15τ⁴ + 6τ⁵)
-    where τ = t/T
+    q(t) = q0 + (q1-q0) * (10τ³ - 15τ⁴ + 6τ⁵)  where τ = t/T
     """
 
     def __init__(self, q_start: State, q_end: State, duration: float):
+        if duration <= 0:
+            raise ValueError(f"duration must be > 0, got {duration}")
+
         self._scalar = isinstance(q_start, (int, float))
         self.q_start = _to_list(q_start)
         self.q_end = _to_list(q_end)
@@ -288,18 +280,17 @@ class MinJerkTrajectory:
         tau = t / self.T if self.T > 1e-12 else 1.0
         tau2, tau3, tau4, tau5 = tau**2, tau**3, tau**4, tau**5
 
-        # Position: s(τ) = 10τ³ - 15τ⁴ + 6τ⁵
-        s = 10 * tau3 - 15 * tau4 + 6 * tau5
-        # Velocity: s'(τ)/T = (30τ² - 60τ³ + 30τ⁴)/T
-        sd = (30 * tau2 - 60 * tau3 + 30 * tau4) / self.T if self.T > 1e-12 else 0.0
-        # Acceleration: s''(τ)/T² = (60τ - 180τ² + 120τ³)/T²
+        s = 10.0 * tau3 - 15.0 * tau4 + 6.0 * tau5
+        sd = (30.0 * tau2 - 60.0 * tau3 + 30.0 * tau4) / self.T if self.T > 1e-12 else 0.0
         sdd = (
-            (60 * tau - 180 * tau2 + 120 * tau3) / (self.T**2)
+            (60.0 * tau - 180.0 * tau2 + 120.0 * tau3) / (self.T**2)
             if self.T > 1e-12
             else 0.0
         )
 
-        pos, vel, acc = [], [], []
+        pos: List[float] = []
+        vel: List[float] = []
+        acc: List[float] = []
         for i in range(self.n):
             dq = self.q_end[i] - self.q_start[i]
             pos.append(self.q_start[i] + dq * s)
@@ -315,6 +306,9 @@ class MinJerkTrajectory:
     @property
     def duration(self) -> float:
         return self.T
+
+    def __repr__(self) -> str:
+        return f"MinJerkTrajectory(n={self.n}, T={self.T:.2f}s)"
 
 
 # ══════════════════════════════════════════
@@ -347,8 +341,7 @@ class TrapezoidalProfile:
         self.q_end = _to_list(q_end)
         self.n = len(self.q_start)
 
-        # Compute profile for the joint that takes longest
-        self._profiles = []
+        self._profiles: List[Tuple[float, float, float, float, float]] = []
         max_duration = 0.0
 
         for i in range(self.n):
@@ -356,28 +349,24 @@ class TrapezoidalProfile:
             sign = 1.0 if self.q_end[i] >= self.q_start[i] else -1.0
 
             if dist < 1e-10:
-                self._profiles.append((0, 0, 0, 0, sign))
+                self._profiles.append((0.0, 0.0, 0.0, 0.0, sign))
                 continue
 
             v_max = max_velocity
             a_max = max_acceleration
 
-            # Time to accelerate to max velocity
             t_accel = v_max / a_max
-            # Distance covered during acceleration
             d_accel = 0.5 * a_max * t_accel**2
 
-            if 2 * d_accel >= dist:
-                # Triangle profile (never reaches max velocity)
+            if 2.0 * d_accel >= dist:
                 t_accel = math.sqrt(dist / a_max)
                 t_cruise = 0.0
-                t_total = 2 * t_accel
+                t_total = 2.0 * t_accel
                 v_peak = a_max * t_accel
             else:
-                # Trapezoidal profile
-                d_cruise = dist - 2 * d_accel
+                d_cruise = dist - 2.0 * d_accel
                 t_cruise = d_cruise / v_max
-                t_total = 2 * t_accel + t_cruise
+                t_total = 2.0 * t_accel + t_cruise
                 v_peak = v_max
 
             self._profiles.append((t_accel, t_cruise, t_total, v_peak, sign))
@@ -389,23 +378,23 @@ class TrapezoidalProfile:
         for i in range(self.n):
             t_accel, t_cruise, t_total, v_peak, sign = self._profiles[i]
             if t_total > 1e-10 and self.T > t_total:
-                # Recompute with stretched duration
                 dist = abs(self.q_end[i] - self.q_start[i])
                 if dist > 1e-10:
-                    # Use the longer duration
-                    t_a = self.T / 3  # rough split
+                    t_a = self.T / 3.0
                     v_p = dist / (self.T - t_a)
                     t_a = v_p / max_acceleration
-                    t_c = self.T - 2 * t_a
+                    t_c = self.T - 2.0 * t_a
                     if t_c < 0:
-                        t_a = self.T / 2
-                        t_c = 0
+                        t_a = self.T / 2.0
+                        t_c = 0.0
                         v_p = dist / t_a
                     self._profiles[i] = (t_a, t_c, self.T, v_p, sign)
 
     def evaluate(self, t: float) -> Tuple[State, State, State]:
         t = max(0.0, min(t, self.T))
-        pos, vel, acc = [], [], []
+        pos: List[float] = []
+        vel: List[float] = []
+        acc: List[float] = []
 
         for i in range(self.n):
             t_accel, t_cruise, t_total, v_peak, sign = self._profiles[i]
@@ -419,24 +408,21 @@ class TrapezoidalProfile:
             a = v_peak / t_accel if t_accel > 1e-10 else 0.0
 
             if t <= t_accel:
-                # Acceleration phase
                 p = self.q_start[i] + sign * 0.5 * a * t**2
                 v = sign * a * t
                 ac = sign * a
             elif t <= t_accel + t_cruise:
-                # Cruise phase
                 dt = t - t_accel
-                d_accel = 0.5 * a * t_accel**2
-                p = self.q_start[i] + sign * (d_accel + v_peak * dt)
+                d_accel_ = 0.5 * a * t_accel**2
+                p = self.q_start[i] + sign * (d_accel_ + v_peak * dt)
                 v = sign * v_peak
                 ac = 0.0
             else:
-                # Deceleration phase
                 dt = t - t_accel - t_cruise
-                d_accel = 0.5 * a * t_accel**2
+                d_accel_ = 0.5 * a * t_accel**2
                 d_cruise = v_peak * t_cruise
                 p = self.q_start[i] + sign * (
-                    d_accel + d_cruise + v_peak * dt - 0.5 * a * dt**2
+                    d_accel_ + d_cruise + v_peak * dt - 0.5 * a * dt**2
                 )
                 v = sign * (v_peak - a * dt)
                 ac = -sign * a
@@ -455,6 +441,9 @@ class TrapezoidalProfile:
     def duration(self) -> float:
         return self.T
 
+    def __repr__(self) -> str:
+        return f"TrapezoidalProfile(n={self.n}, T={self.T:.2f}s)"
+
 
 # ══════════════════════════════════════════
 # LINEAR INTERPOLATION
@@ -468,6 +457,9 @@ class LinearTrajectory:
     """
 
     def __init__(self, q_start: State, q_end: State, duration: float):
+        if duration <= 0:
+            raise ValueError(f"duration must be > 0, got {duration}")
+
         self._scalar = isinstance(q_start, (int, float))
         self.q_start = _to_list(q_start)
         self.q_end = _to_list(q_end)
@@ -478,7 +470,9 @@ class LinearTrajectory:
         t = max(0.0, min(t, self.T))
         s = t / self.T if self.T > 1e-12 else 1.0
 
-        pos, vel, acc = [], [], []
+        pos: List[float] = []
+        vel: List[float] = []
+        acc: List[float] = []
         for i in range(self.n):
             dq = self.q_end[i] - self.q_start[i]
             pos.append(self.q_start[i] + dq * s)
@@ -495,6 +489,9 @@ class LinearTrajectory:
     def duration(self) -> float:
         return self.T
 
+    def __repr__(self) -> str:
+        return f"LinearTrajectory(n={self.n}, T={self.T:.2f}s)"
+
 
 # ══════════════════════════════════════════
 # MULTI-WAYPOINT PATH
@@ -510,7 +507,7 @@ class WaypointPath:
     Args:
         waypoints: List of joint configurations [[q1,...], [q1,...], ...]
         durations: Time for each segment (len = len(waypoints) - 1)
-        method: "quintic", "cubic", "minjerk", "trapez", "linear"
+        method: ``"quintic"``, ``"cubic"``, ``"minjerk"``, ``"linear"``
 
     Usage:
         path = WaypointPath(
@@ -540,19 +537,29 @@ class WaypointPath:
         self.waypoints = waypoints
         self.n_segments = len(waypoints) - 1
 
-        # Default: 2 seconds per segment
         if durations is None:
             durations = [2.0] * self.n_segments
         if len(durations) != self.n_segments:
-            raise ValueError(f"Need {self.n_segments} durations, got {len(durations)}")
+            raise ValueError(
+                f"Need {self.n_segments} durations, got {len(durations)}"
+            )
+
+        for d in durations:
+            if d <= 0:
+                raise ValueError(f"All durations must be > 0, got {d}")
+
+        traj_class = self.METHODS.get(method)
+        if traj_class is None:
+            raise ValueError(
+                f"Unknown method {method!r}. "
+                f"Available: {list(self.METHODS)}"
+            )
 
         self.durations = durations
         self.T = sum(durations)
 
-        # Build segments
-        traj_class = self.METHODS.get(method, QuinticTrajectory)
-        self._segments = []
-        self._segment_starts = []  # cumulative start times
+        self._segments: List = []
+        self._segment_starts: List[float] = []
         cumulative = 0.0
 
         for i in range(self.n_segments):
@@ -566,19 +573,15 @@ class WaypointPath:
             cumulative += durations[i]
 
     def evaluate(self, t: float) -> Tuple[State, State, State]:
-        """Evaluate the path at time t."""
+        """Evaluate the path at time t (clamped to [0, total_duration])."""
         t = max(0.0, min(t, self.T))
 
-        # Find which segment we're in
         for i in range(self.n_segments):
-            seg_start = self._segment_starts[i]
-            seg_end = seg_start + self.durations[i]
-
+            seg_end = self._segment_starts[i] + self.durations[i]
             if t <= seg_end or i == self.n_segments - 1:
-                local_t = t - seg_start
+                local_t = t - self._segment_starts[i]
                 return self._segments[i].evaluate(local_t)
 
-        # Shouldn't reach here, but return final position
         return self._segments[-1].evaluate(self.durations[-1])
 
     @property
@@ -588,6 +591,12 @@ class WaypointPath:
     @property
     def num_segments(self) -> int:
         return self.n_segments
+
+    def __repr__(self) -> str:
+        return (
+            f"WaypointPath(segments={self.n_segments}, "
+            f"T={self.T:.2f}s)"
+        )
 
 
 # ══════════════════════════════════════════
@@ -611,7 +620,11 @@ class TrajectoryExecutor:
     """
 
     def __init__(
-        self, robot, trajectory, pid_controllers: List, start_time: float = 0.0
+        self,
+        robot,
+        trajectory,
+        pid_controllers: List,
+        start_time: float = 0.0,
     ):
         self.robot = robot
         self.trajectory = trajectory
@@ -620,8 +633,12 @@ class TrajectoryExecutor:
         self._started = False
         self.done = False
 
-    def step(self, dt: float):
-        """Call this from the robot's on_update callback."""
+    def step(self, dt: float) -> None:
+        """Call this from the robot's control loop callback.
+
+        Args:
+            dt: Time step in seconds
+        """
         if not self._started:
             self.start_time = self.robot.time
             self._started = True
@@ -647,3 +664,9 @@ class TrajectoryExecutor:
             torques.append(torque)
 
         self.robot.set_joint_torques(torques)
+
+    def __repr__(self) -> str:
+        return (
+            f"TrajectoryExecutor(done={self.done}, "
+            f"trajectory={type(self.trajectory).__name__})"
+        )

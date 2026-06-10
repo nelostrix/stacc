@@ -15,7 +15,9 @@ except ImportError:
 from stacc.kinematics.transforms import DH
 
 
-def forward_kinematics_dh(dh_params: List[DH], joint_angles: List[float]) -> "np.ndarray":
+def forward_kinematics_dh(
+    dh_params: List[DH], joint_angles: List[float]
+) -> "np.ndarray":
     """Compute FK using DH parameters.
 
     Args:
@@ -29,7 +31,8 @@ def forward_kinematics_dh(dh_params: List[DH], joint_angles: List[float]) -> "np
         raise ImportError("numpy required for FK")
     if len(dh_params) != len(joint_angles):
         raise ValueError(
-            f"DH params ({len(dh_params)}) and joint angles ({len(joint_angles)}) must match"
+            f"DH params ({len(dh_params)}) and joint angles "
+            f"({len(joint_angles)}) must match"
         )
 
     T = np.eye(4)
@@ -38,7 +41,9 @@ def forward_kinematics_dh(dh_params: List[DH], joint_angles: List[float]) -> "np
     return T
 
 
-def forward_kinematics_chain(dh_params: List[DH], joint_angles: List[float]) -> List["np.ndarray"]:
+def forward_kinematics_chain(
+    dh_params: List[DH], joint_angles: List[float]
+) -> List["np.ndarray"]:
     """Compute FK for all frames in the chain (not just end-effector).
 
     Returns:
@@ -55,23 +60,32 @@ def forward_kinematics_chain(dh_params: List[DH], joint_angles: List[float]) -> 
     return frames
 
 
-def end_effector_position(dh_params: List[DH], joint_angles: List[float]) -> "np.ndarray":
-    """Get just the xyz position of the end effector."""
+def end_effector_position(
+    dh_params: List[DH], joint_angles: List[float]
+) -> "np.ndarray":
+    """Get just the [x, y, z] position of the end effector."""
     T = forward_kinematics_dh(dh_params, joint_angles)
     return T[:3, 3]
 
 
-def end_effector_rotation(dh_params: List[DH], joint_angles: List[float]) -> "np.ndarray":
+def end_effector_rotation(
+    dh_params: List[DH], joint_angles: List[float]
+) -> "np.ndarray":
     """Get the 3x3 rotation matrix of the end effector."""
     T = forward_kinematics_dh(dh_params, joint_angles)
     return T[:3, :3]
 
 
-def jacobian(dh_params: List[DH], joint_angles: List[float]) -> "np.ndarray":
+def jacobian(
+    dh_params: List[DH], joint_angles: List[float]
+) -> "np.ndarray":
     """Compute the 6×n geometric Jacobian matrix.
 
     The Jacobian maps joint velocities to end-effector spatial velocity:
         [v_x, v_y, v_z, w_x, w_y, w_z]^T = J * [dq_1, ..., dq_n]^T
+
+    Note: Currently supports revolute joints only. For prismatic joints,
+    the linear/angular velocity columns would differ.
 
     Returns:
         6×n numpy array
@@ -87,16 +101,11 @@ def jacobian(dh_params: List[DH], joint_angles: List[float]) -> "np.ndarray":
     J = np.zeros((6, n))
 
     for i in range(n):
-        # Get transform to frame i
-        if i == 0:
-            T_i = np.eye(4)
-        else:
-            T_i = frames[i - 1]
+        T_i = np.eye(4) if i == 0 else frames[i - 1]
 
         z_i = T_i[:3, 2]  # z-axis of frame i
         p_i = T_i[:3, 3]  # origin of frame i
 
-        # For revolute joints
         J[:3, i] = np.cross(z_i, p_ee - p_i)  # linear velocity
         J[3:, i] = z_i                          # angular velocity
 

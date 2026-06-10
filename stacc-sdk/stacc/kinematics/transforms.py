@@ -16,15 +16,24 @@ except ImportError:
     HAS_NUMPY = False
 
 
-def _require_numpy():
+def _require_numpy() -> None:
     if not HAS_NUMPY:
-        raise ImportError("numpy is required for transforms. Install with: pip install numpy")
+        raise ImportError(
+            "numpy is required for transforms. Install with: pip install numpy"
+        )
 
 
 # ── Rotation matrices ──
 
 def rot_x(angle: float) -> "np.ndarray":
-    """Rotation matrix about X axis."""
+    """Rotation matrix about X axis.
+
+    Args:
+        angle: Rotation angle in radians
+
+    Returns:
+        3x3 rotation matrix
+    """
     _require_numpy()
     c, s = math.cos(angle), math.sin(angle)
     return np.array([
@@ -81,7 +90,9 @@ def rotation_to_euler(R: "np.ndarray") -> Tuple[float, float, float]:
 
 # ── Quaternions (w, x, y, z convention) ──
 
-def euler_to_quaternion(roll: float, pitch: float, yaw: float) -> Tuple[float, float, float, float]:
+def euler_to_quaternion(
+    roll: float, pitch: float, yaw: float
+) -> Tuple[float, float, float, float]:
     """Convert Euler angles to quaternion (w, x, y, z)."""
     cr, sr = math.cos(roll / 2), math.sin(roll / 2)
     cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
@@ -95,14 +106,16 @@ def euler_to_quaternion(roll: float, pitch: float, yaw: float) -> Tuple[float, f
     return w, x, y, z
 
 
-def quaternion_to_euler(w: float, x: float, y: float, z: float) -> Tuple[float, float, float]:
+def quaternion_to_euler(
+    w: float, x: float, y: float, z: float
+) -> Tuple[float, float, float]:
     """Convert quaternion (w, x, y, z) to Euler angles (roll, pitch, yaw)."""
     sinr_cosp = 2 * (w * x + y * z)
     cosr_cosp = 1 - 2 * (x**2 + y**2)
     roll = math.atan2(sinr_cosp, cosr_cosp)
 
     sinp = 2 * (w * y - z * x)
-    sinp = max(-1, min(1, sinp))
+    sinp = max(-1.0, min(1.0, sinp))
     pitch = math.asin(sinp)
 
     siny_cosp = 2 * (w * z + x * y)
@@ -112,7 +125,9 @@ def quaternion_to_euler(w: float, x: float, y: float, z: float) -> Tuple[float, 
     return roll, pitch, yaw
 
 
-def quaternion_to_rotation(w: float, x: float, y: float, z: float) -> "np.ndarray":
+def quaternion_to_rotation(
+    w: float, x: float, y: float, z: float
+) -> "np.ndarray":
     """Convert quaternion to 3x3 rotation matrix."""
     _require_numpy()
     return np.array([
@@ -122,7 +137,10 @@ def quaternion_to_rotation(w: float, x: float, y: float, z: float) -> "np.ndarra
     ])
 
 
-def quaternion_multiply(q1: tuple, q2: tuple) -> Tuple[float, float, float, float]:
+def quaternion_multiply(
+    q1: Tuple[float, float, float, float],
+    q2: Tuple[float, float, float, float],
+) -> Tuple[float, float, float, float]:
     """Hamilton product of two quaternions (w, x, y, z)."""
     w1, x1, y1, z1 = q1
     w2, x2, y2, z2 = q2
@@ -134,7 +152,9 @@ def quaternion_multiply(q1: tuple, q2: tuple) -> Tuple[float, float, float, floa
     )
 
 
-def quaternion_normalize(w: float, x: float, y: float, z: float) -> Tuple[float, float, float, float]:
+def quaternion_normalize(
+    w: float, x: float, y: float, z: float
+) -> Tuple[float, float, float, float]:
     """Normalize quaternion to unit length."""
     norm = math.sqrt(w**2 + x**2 + y**2 + z**2)
     if norm < 1e-10:
@@ -145,7 +165,15 @@ def quaternion_normalize(w: float, x: float, y: float, z: float) -> Tuple[float,
 # ── Homogeneous transforms (4x4) ──
 
 def homogeneous(R: "np.ndarray", t: "np.ndarray") -> "np.ndarray":
-    """Build 4x4 homogeneous transformation matrix from rotation and translation."""
+    """Build 4x4 homogeneous transform from rotation and translation.
+
+    Args:
+        R: 3x3 rotation matrix
+        t: 3-element translation vector
+
+    Returns:
+        4x4 homogeneous transformation matrix
+    """
     _require_numpy()
     T = np.eye(4)
     T[:3, :3] = R
@@ -153,8 +181,10 @@ def homogeneous(R: "np.ndarray", t: "np.ndarray") -> "np.ndarray":
     return T
 
 
-def transform_from_euler(x: float, y: float, z: float,
-                          roll: float, pitch: float, yaw: float) -> "np.ndarray":
+def transform_from_euler(
+    x: float, y: float, z: float,
+    roll: float, pitch: float, yaw: float,
+) -> "np.ndarray":
     """Build 4x4 transform from position + Euler angles."""
     _require_numpy()
     R = euler_to_rotation(roll, pitch, yaw)
@@ -162,7 +192,10 @@ def transform_from_euler(x: float, y: float, z: float,
 
 
 def transform_inverse(T: "np.ndarray") -> "np.ndarray":
-    """Compute the inverse of a homogeneous transform (faster than np.linalg.inv)."""
+    """Compute inverse of a homogeneous transform (faster than np.linalg.inv).
+
+    Uses the property that [R t; 0 1]⁻¹ = [Rᵀ  -Rᵀt; 0 1].
+    """
     _require_numpy()
     R = T[:3, :3]
     t = T[:3, 3]
@@ -173,7 +206,15 @@ def transform_inverse(T: "np.ndarray") -> "np.ndarray":
 
 
 def transform_point(T: "np.ndarray", point: "np.ndarray") -> "np.ndarray":
-    """Apply a homogeneous transform to a 3D point."""
+    """Apply a homogeneous transform to a 3D point.
+
+    Args:
+        T: 4x4 homogeneous transformation matrix
+        point: 3-element point [x, y, z]
+
+    Returns:
+        Transformed 3-element point
+    """
     _require_numpy()
     p = np.append(point, 1.0)
     return (T @ p)[:3]
@@ -189,16 +230,47 @@ class DH:
         alpha: link twist (about x_{i-1})
         d:     link offset (along z_i)
         theta_offset: joint angle offset
+
+    Usage:
+        dh = DH(a=1.0, alpha=0.5, d=0.2, theta_offset=0.1)
+        T = dh.transform(theta=0.5)
     """
 
-    def __init__(self, a: float = 0, alpha: float = 0, d: float = 0, theta_offset: float = 0):
+    def __init__(
+        self,
+        a: float = 0.0,
+        alpha: float = 0.0,
+        d: float = 0.0,
+        theta_offset: float = 0.0,
+    ):
         self.a = a
         self.alpha = alpha
         self.d = d
         self.theta_offset = theta_offset
 
+    @classmethod
+    def from_param_list(
+        cls, params: List[Tuple[float, float, float, float]]
+    ) -> List[DH]:
+        """Create a list of DH parameters from a list of (a, alpha, d, theta_offset) tuples.
+
+        Args:
+            params: List of (a, alpha, d, theta_offset) tuples
+
+        Returns:
+            List of DH objects
+        """
+        return [cls(a, alpha, d, offset) for a, alpha, d, offset in params]
+
     def transform(self, theta: float) -> "np.ndarray":
-        """Compute the 4x4 transform for this DH frame at joint angle theta."""
+        """Compute the 4x4 transform for this DH frame at joint angle theta.
+
+        Args:
+            theta: Joint angle in radians
+
+        Returns:
+            4x4 homogeneous transformation matrix
+        """
         _require_numpy()
         t = theta + self.theta_offset
         ct, st = math.cos(t), math.sin(t)
@@ -211,17 +283,33 @@ class DH:
             [0,   0,        0,       1],
         ])
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DH):
+            return NotImplemented
+        return (
+            math.isclose(self.a, other.a)
+            and math.isclose(self.alpha, other.alpha)
+            and math.isclose(self.d, other.d)
+            and math.isclose(self.theta_offset, other.theta_offset)
+        )
+
     def __repr__(self) -> str:
-        return f"DH(a={self.a}, alpha={self.alpha:.3f}, d={self.d}, offset={self.theta_offset:.3f})"
+        return (
+            f"DH(a={self.a}, alpha={self.alpha:.3f}, "
+            f"d={self.d}, offset={self.theta_offset:.3f})"
+        )
 
 
 # ── Axis-angle ──
 
 def axis_angle_to_rotation(axis: List[float], angle: float) -> "np.ndarray":
-    """Convert axis-angle representation to rotation matrix (Rodrigues)."""
+    """Convert axis-angle representation to rotation matrix (Rodrigues formula)."""
     _require_numpy()
     axis = np.array(axis, dtype=float)
-    axis = axis / np.linalg.norm(axis)
+    norm = np.linalg.norm(axis)
+    if norm < 1e-10:
+        return np.eye(3)
+    axis = axis / norm
     K = np.array([
         [0, -axis[2], axis[1]],
         [axis[2], 0, -axis[0]],
@@ -233,12 +321,12 @@ def axis_angle_to_rotation(axis: List[float], angle: float) -> "np.ndarray":
 def rotation_to_axis_angle(R: "np.ndarray") -> Tuple[List[float], float]:
     """Extract axis-angle from rotation matrix."""
     _require_numpy()
-    angle = math.acos(max(-1, min(1, (np.trace(R) - 1) / 2)))
+    angle = math.acos(max(-1.0, min(1.0, (np.trace(R) - 1.0) / 2.0)))
     if abs(angle) < 1e-10:
-        return [0, 0, 1], 0.0
+        return [0.0, 0.0, 1.0], 0.0
     axis = np.array([
         R[2, 1] - R[1, 2],
         R[0, 2] - R[2, 0],
         R[1, 0] - R[0, 1],
-    ]) / (2 * math.sin(angle))
+    ]) / (2.0 * math.sin(angle))
     return axis.tolist(), angle
