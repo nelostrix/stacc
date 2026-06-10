@@ -72,6 +72,14 @@ All core commands implemented:
 - `SCurveProfile` — jerk-limited trajectory generation
 - `ControllerPipeline` with named `ControllerStage`s, enable/disable, conditional skip
 
+### Gait Module
+- `GaitGenerator` base class with configurable swing_ratio, direction turning, reset
+- `TrotGait`, `WalkGait`, `CrawlGait`, `GallopGait`, `BoundGait` — quadruped gaits
+- `BipedWalkGait` — bipedal walking with hip sway
+- `TripodGait` — hexapod alternating tripods
+- `CPGGenerator` — oscillator-based adaptive gait with 5 coupling presets
+- `FlightController` — multirotor attitude control and motor mixing
+
 ### AI Module
 - `EKFSLAM`, `ParticleFilterSLAM` — full implementations with motion/update/resample
 - `ICPMatcher` — scan-to-scan matching with SVD
@@ -100,6 +108,7 @@ All core commands implemented:
 - [x] GUI platform prototype
 - [x] Control module — PID, filters, feedforward, limiters, pipelines
 - [x] AI module — SLAM, path planning, behavior trees, NLP, vision
+- [x] Gait module — generators for all legged gaits + CPG + flight controller
 - [ ] Core robot model (joints, links, URDF)
 - [ ] Kinematics engine (FK, IK, dynamics)
 - [ ] MuJoCo simulation backend

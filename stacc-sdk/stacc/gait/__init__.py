@@ -4,14 +4,15 @@ Generates foot placement trajectories and body motion for walking,
 running, and flying. Works for any number of legs and any leg geometry.
 
 Gait types:
-- Walk: 3 feet on ground at all times (quadruped/hexapod)
-- Trot: diagonal pairs move together
-- Crawl: one leg at a time (slow, stable)
-- Gallop: front pair then back pair (fast, unstable)
-- Bound: both fronts then both rears
-- Pronk: all four feet together (jumping)
-- Tripod: alternating groups of 3 (hexapod)
-- CPG: Central Pattern Generator — oscillator-based adaptive gait
+- Walk:    3 feet on ground at all times (quadruped/hexapod)
+- Trot:    diagonal pairs move together (quadruped)
+- Crawl:   one leg at a time, slow & stable (quadruped)
+- Gallop:  front pair then back pair, fast & unstable (quadruped)
+- Bound:   both fronts then both rears (quadruped)
+- Biped:   alternating legs with hip sway (biped)
+- Tripod:  alternating groups of 3 legs (hexapod)
+- CPG:     Central Pattern Generator — oscillator-based adaptive gait
+- Flight:  multirotor attitude & motor control (quad/hex/octo)
 
 Usage:
     from stacc.gait import TrotGait, CPGGenerator, FlightController
