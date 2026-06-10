@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-06-10 — gait module overhaul + control/ai improvements
+## 2026-06-10 — gait module overhaul + gripper module overhaul + control/ai improvements
 
 ### `stacc.control` — Major expansions
 
@@ -65,3 +65,41 @@
 - Input validation on `num_rotors`
 - Mixing matrix construction extracted to `_build_mixing_matrix()` static method
 - Cleaned up type hints and docstrings
+
+### `stacc.gripper` — Full module overhaul
+
+**`base.py`** — `Gripper` base class refactored:
+- Fixed bare-string docstring to a proper triple-quoted docstring
+- Added `reset()` method to reset gripper to fully open / zero-force state
+- Replaced fragile `str.replace("ing", "ed")` in `stop()` with explicit state checks
+- Added `__repr__()` for readable state inspection
+- Added return type annotations (`-> None`) to all public methods
+- Improved docstrings on all methods
+
+**`parallel.py`** — `ParallelGripper` polished:
+- Fixed mangled docstring formatting (capitalization, spacing)
+- Added input validation (`min_width >= 0`, `max_width > min_width`)
+- `close()` now accepts optional `width` parameter to stop before full closure (enables object grasp detection)
+- Added `__repr__` via base class inheritance
+
+**`dexterous.py`** — `DexterousHand` expanded:
+- Added missing `from stacc.gripper.base import Gripper` import
+- Added configurable `curl_power_grasp` and `curl_pinch_grasp` parameters (were hardcoded)
+- Added `reset()` method that resets finger angles and calls `super().reset()`
+- `set_finger()` now raises `IndexError` instead of silently ignoring out-of-range indices
+- Added input validation (`num_fingers >= 1`, `joints_per_finger >= 1`)
+
+**`magnetic.py`** — `MagneticGripper` cleaned:
+- Added missing `Gripper` import
+- Added `release()` convenience method (delegates to `open()`)
+- Added input validation (`max_force > 0`, `diameter > 0`)
+
+**`soft.py`** — `SoftGripper` polished:
+- Added missing `Gripper` import
+- Added `reset()` method that clears curl angles
+- Added input validation (`num_fingers >= 1`, `compliance` in `[0, 1]`)
+
+**`vacuum.py`** — `VacuumGripper` refined:
+- Added missing `Gripper` import
+- Extracted vacuum-to-force calculation into `holding_force` property with formula documentation
+- Added input validation (`num_cups >= 1`, `cup_diameter > 0`, `seal_threshold` in valid range)

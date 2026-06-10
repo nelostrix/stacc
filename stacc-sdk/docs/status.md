@@ -72,6 +72,14 @@ All core commands implemented:
 - `SCurveProfile` — jerk-limited trajectory generation
 - `ControllerPipeline` with named `ControllerStage`s, enable/disable, conditional skip
 
+### Gripper Module
+- `Gripper` base class with open/close/stop/reset state machine and grasp detection
+- `ParallelGripper` — parallel jaw with configurable width, force, speed
+- `VacuumGripper` — suction cups with pressure, seal detection, holding force calc
+- `SoftGripper` — compliant fingers with configurable curl and compliance
+- `MagneticGripper` — electromagnetic with instant engage/release
+- `DexterousHand` — multi-finger hand with power/pinch grasp and finger-level control
+
 ### Gait Module
 - `GaitGenerator` base class with configurable swing_ratio, direction turning, reset
 - `TrotGait`, `WalkGait`, `CrawlGait`, `GallopGait`, `BoundGait` — quadruped gaits
@@ -109,6 +117,7 @@ All core commands implemented:
 - [x] Control module — PID, filters, feedforward, limiters, pipelines
 - [x] AI module — SLAM, path planning, behavior trees, NLP, vision
 - [x] Gait module — generators for all legged gaits + CPG + flight controller
+- [x] Gripper module — parallel, vacuum, soft, magnetic, dexterous end effectors
 - [ ] Core robot model (joints, links, URDF)
 - [ ] Kinematics engine (FK, IK, dynamics)
 - [ ] MuJoCo simulation backend
