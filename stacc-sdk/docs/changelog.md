@@ -2,6 +2,77 @@
 
 ## 2026-06-10 — hal + gait + gripper + robot + control/ai improvements
 
+### `stacc.sensors` — Full module overhaul
+
+**`base.py`** — `BaseSensor` class:
+- Added input validation on `rate > 0` and `noise_stddev >= 0`
+- Added `reset()` method to clear last reading, timer, and re-enable sensor
+
+**`imu.py`** — `IMU` class:
+- **Bug fix**: `read()` was using `self.acceleration[i]` instead of `self.angular_velocity[i]` for gyroscope output
+- Added `reset()` method to restore default readings (gravity at rest, zero angular velocity)
+- Added input validation on `accel_noise`, `gyro_noise`, `mag_noise` (must be `>= 0`)
+- Added `__repr__()` with noise parameters
+
+**`camera.py`** — `Camera` class:
+- Added input validation (`width > 0`, `height > 0`, `fov` in (0, 180))
+- Added `reset()` method to clear image and backend references
+- Added `__repr__()` with resolution and FOV
+
+**`lidar.py`** — `LiDAR` class:
+- Added input validation on all constructor args
+- Added `reset()` method to clear scan data
+- Added `__repr__()` with channel and range info
+
+**`encoder.py`** — `Encoder` class:
+- Added input validation (`ticks_per_rev > 0`, `gear_ratio > 0`)
+- Added `reset()` method to zero tick counters
+- Added `__repr__()` with resolution and gear ratio
+
+**`ir.py`** — `IRArray` class:
+- Added input validation (`count >= 1`, `spacing > 0`)
+- Added `reset()` method to clear readings
+- Added `__repr__()` with element count
+
+**`ultrasonic.py`** — `Ultrasonic` class:
+- Added input validation (`range_max > 0`, `range_min >= 0`, `range_min < range_max`, `beam_angle > 0`)
+- Added `reset()` method
+- Added `__repr__()` with range and beam angle
+
+**`gps.py`** — `GPS` class:
+- **Removed duplicate `Ultrasonic` class** that was accidentally copied here
+- Added `reset()` method
+- Added `__repr__()` with origin coordinates
+
+**`barometer.py`** — `Barometer` class:
+- Added `reset()` method
+- Added `__repr__()`
+
+**`temperature.py`** — `TemperatureSensor` class:
+- Added input validation (`range_max > range_min`)
+- Added `reset()` method
+- Added `__repr__()` with range
+
+**`contact.py`** — `ContactSensor` class:
+- Added input validation (`threshold > 0`)
+- Added `reset()` method to clear force state
+- Added `__repr__()`
+
+**`force_torque.py`** — `ForceTorqueSensor` class:
+- Added input validation (`range_force > 0`, `range_torque > 0`)
+- Added `reset()` method to zero wrench
+- Added `__repr__()`
+
+**`depth_camera.py`** — `DepthCamera` class:
+- Added input validation on all constructor args
+- Added `reset()` method
+- Added `__repr__()`
+
+**`stereo_camera.py`** — `StereoCamera` class:
+- Added input validation (`baseline > 0`)
+- Added `reset()` method (delegates to both cameras)
+- Added `__repr__()` with baseline and resolution
+
 ### `stacc.robot` — Full module overhaul
 
 **`differential_drive.py`** — `DifferentialDrive` class:
@@ -14,8 +85,6 @@
 - Added `reset()` method to zero all joint positions
 - Added `__repr__()` with joint count and parameter info
 - Empty DH list is valid (zero-joint arm)
-
-### `stacc.control` — Major expansions
 
 ### `stacc.control` — Major expansions
 

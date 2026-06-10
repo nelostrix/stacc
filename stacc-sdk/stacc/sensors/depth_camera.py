@@ -12,10 +12,10 @@ class DepthCamera(BaseSensor):
     Produces both RGB image and depth map.
 
     Args:
-        width: Image width in pixels
-        height: Image height in pixels
-        fov: Field of view in degrees
-        range_max: Maximum depth in meters
+        width: Image width in pixels (must be > 0)
+        height: Image height in pixels (must be > 0)
+        fov: Field of view in degrees (must be in (0, 180))
+        range_max: Maximum depth in meters (must be > 0)
         rate: Frame rate in Hz
     """
 
@@ -32,13 +32,30 @@ class DepthCamera(BaseSensor):
         super().__init__(
             name="depth_camera", rate=rate, noise_stddev=noise_stddev, **kwargs
         )
+        if width <= 0:
+            raise ValueError(f"width must be > 0, got {width}")
+        if height <= 0:
+            raise ValueError(f"height must be > 0, got {height}")
+        if fov <= 0 or fov >= 180:
+            raise ValueError(f"fov must be in (0, 180), got {fov}")
+        if range_max <= 0:
+            raise ValueError(f"range_max must be > 0, got {range_max}")
+
         self.width = width
         self.height = height
         self.fov = fov
         self.range_max = range_max
 
-        self._rgb = None  # (H, W, 3) uint8
-        self._depth = None  # (H, W) float32 in meters
+        self._rgb = None
+        self._depth = None
+        self._mj_model = None
+        self._mj_data = None
+        self._mj_renderer = None
+
+    def reset(self):
+        """Clear images and backend references."""
+        self._rgb = None
+        self._depth = None
         self._mj_model = None
         self._mj_data = None
         self._mj_renderer = None
@@ -99,7 +116,6 @@ class DepthCamera(BaseSensor):
         return self._depth
 
     def get_point_cloud(self) -> Optional[List[List[float]]]:
-        """Convert depth map to 3D point cloud."""
         if self._depth is None:
             return None
 
@@ -110,10 +126,9 @@ class DepthCamera(BaseSensor):
 
         points = []
         fx = self.width / (2 * math.tan(math.radians(self.fov / 2)))
-        fy = fx  # square pixels
+        fy = fx
         cx, cy = self.width / 2, self.height / 2
 
-        # Subsample for performance
         step = max(1, min(self.width, self.height) // 64)
 
         for v in range(0, self.height, step):
@@ -126,3 +141,9 @@ class DepthCamera(BaseSensor):
                 points.append([x, y, z])
 
         return points
+
+    def __repr__(self) -> str:
+        return (
+            f"DepthCamera(name='{self.name}', resolution=({self.width}x{self.height}), "
+            f"fov={self.fov}, range_max={self.range_max}m, rate={self.rate}Hz)"
+        )

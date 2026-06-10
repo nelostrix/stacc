@@ -28,6 +28,11 @@ class BaseSensor:
         noise_stddev: float = 0.0,
         enabled: bool = True,
     ):
+        if rate <= 0:
+            raise ValueError(f"rate must be > 0, got {rate}")
+        if noise_stddev < 0:
+            raise ValueError(f"noise_stddev must be >= 0, got {noise_stddev}")
+
         self.name = name
         self.rate = rate
         self.noise_stddev = noise_stddev
@@ -63,6 +68,12 @@ class BaseSensor:
             self._last_time = current_time
             return True
         return False
+
+    def reset(self):
+        """Reset sensor state (clear last reading and timer)."""
+        self._last_reading = None
+        self._last_time = 0.0
+        self.enabled = True
 
     def to_dict(self) -> Dict[str, Any]:
         return {

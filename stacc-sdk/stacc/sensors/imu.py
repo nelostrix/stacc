@@ -25,32 +25,33 @@ class IMU(BaseSensor):
         **kwargs,
     ):
         super().__init__(name="imu", rate=rate, **kwargs)
+        if accel_noise < 0:
+            raise ValueError(f"accel_noise must be >= 0, got {accel_noise}")
+        if gyro_noise < 0:
+            raise ValueError(f"gyro_noise must be >= 0, got {gyro_noise}")
+        if mag_noise < 0:
+            raise ValueError(f"mag_noise must be >= 0, got {mag_noise}")
+
         self.accel_noise = accel_noise
         self.gyro_noise = gyro_noise
         self.mag_noise = mag_noise
 
-        # Current readings
-        self.acceleration = [0.0, 0.0, 9.81]  # m/s² (gravity)
-        self.angular_velocity = [0.0, 0.0, 0.0]  # rad/s
-        self.magnetic_field = [20.0, 0.0, 40.0]  # μT
+        self.reset()
 
-        # Fused orientation (Euler angles)
+    def reset(self):
+        """Reset IMU readings to default values."""
+        self.acceleration = [0.0, 0.0, 9.81]
+        self.angular_velocity = [0.0, 0.0, 0.0]
+        self.magnetic_field = [20.0, 0.0, 40.0]
         self.roll = 0.0
         self.pitch = 0.0
         self.yaw = 0.0
 
     def read(self) -> Dict[str, List[float]]:
-        """Read all IMU axes."""
         return {
             "acceleration": self.add_noise_vector(self.acceleration),
-            "angular_velocity": [
-                self.acceleration[i] + random.gauss(0, self.gyro_noise)
-                for i in range(3)
-            ],
-            "magnetic_field": [
-                self.magnetic_field[i] + random.gauss(0, self.mag_noise)
-                for i in range(3)
-            ],
+            "angular_velocity": self.add_noise_vector(self.angular_velocity),
+            "magnetic_field": self.add_noise_vector(self.magnetic_field),
             "orientation": [self.roll, self.pitch, self.yaw],
         }
 
@@ -59,3 +60,9 @@ class IMU(BaseSensor):
 
     def read_gyroscope(self) -> List[float]:
         return [g + random.gauss(0, self.gyro_noise) for g in self.angular_velocity]
+
+    def __repr__(self) -> str:
+        return (
+            f"IMU(name='{self.name}', rate={self.rate}Hz, "
+            f"accel_noise={self.accel_noise}, gyro_noise={self.gyro_noise})"
+        )

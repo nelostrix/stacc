@@ -104,6 +104,22 @@ All core commands implemented:
 - `DifferentialDrive` — 2-wheel mobile robot with speed, velocity, and heading control
 - `SerialManipulator` — N-DOF arm with FK, IK, Jacobian via DH parameters
 
+### Sensor Module
+- `IMU` — 9-axis accelerometer + gyroscope + magnetometer with fused orientation
+- `Camera` — RGB camera with synthetic/MuJoCo rendering
+- `DepthCamera` — RGB-D with point cloud generation
+- `StereoCamera` — calibrated stereo pair for depth estimation
+- `LiDAR` — 2D/3D laser scanner with configurable channels and FOV
+- `GPS` — global positioning with lat/lon/alt and configurable origin
+- `Ultrasonic` — single-beam range finder (HC-SR04-style)
+- `Encoder` — rotary quadrature encoder with velocity estimation
+- `IRArray` — multi-element IR line-follower array
+- `ForceTorqueSensor` — 6-axis F/T wrench measurement
+- `ContactSensor` — binary/analog contact detection
+- `Barometer` — pressure-based altitude estimation
+- `TemperatureSensor` — ambient temperature monitoring
+- `BaseSensor` — universal base with noise model, rate limiting, serialization
+
 ### AI Module
 - `EKFSLAM`, `ParticleFilterSLAM` — full implementations with motion/update/resample
 - `ICPMatcher` — scan-to-scan matching with SVD
@@ -122,7 +138,6 @@ All core commands implemented:
 - URDF parsing / serialization
 - MuJoCo simulation backend
 - Hardware abstraction layer
-- Sensor simulation
 - AI/perception toolkit
 
 ## Roadmap
@@ -136,6 +151,7 @@ All core commands implemented:
 - [x] HAL module — board detection, GPIO, I2C, SPI, serial, motor/servo drivers, deploy
 - [x] Core robot model — DifferentialDrive, SerialManipulator, Robot base, Joint, Link
 - [x] Kinematics engine (FK, IK, trajectory generation)
+- [x] Sensor module — IMU, cameras, LiDAR, GPS, ultrasonic, encoder, IR, F/T, barometer, temperature, contact
 - [ ] MuJoCo simulation backend
 - [ ] Hardware abstraction layer
 - [ ] Sensor simulation

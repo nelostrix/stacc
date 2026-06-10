@@ -5,10 +5,6 @@ from typing import Any, Dict, List, Tuple
 
 from stacc.sensors.base import BaseSensor
 
-# ══════════════════════════════════════════
-# LIDAR SENSOR
-# ══════════════════════════════════════════
-
 
 class LiDAR(BaseSensor):
     """LiDAR sensor — 2D or 3D laser scanner.
@@ -18,14 +14,14 @@ class LiDAR(BaseSensor):
     Otherwise returns configurable default/noise values.
 
     Args:
-        channels: Number of vertical channels (1 = 2D LiDAR, 16/32/64 = 3D)
-        points_per_channel: Horizontal resolution per channel
-        range_max: Maximum detection range in meters
-        range_min: Minimum detection range in meters
-        fov_h: Horizontal field of view in degrees (360 for full rotation)
-        fov_v: Vertical field of view in degrees (0 for 2D)
+        channels: Number of vertical channels (must be >= 1; 1 = 2D, 16/32/64 = 3D)
+        points_per_channel: Horizontal resolution per channel (must be >= 1)
+        range_max: Maximum detection range in meters (must be > 0)
+        range_min: Minimum detection range in meters (must be >= 0, < range_max)
+        fov_h: Horizontal field of view in degrees (must be > 0)
+        fov_v: Vertical field of view in degrees (must be >= 0)
         rate: Scan rate in Hz
-        noise_stddev: Range noise standard deviation in meters
+        noise_stddev: Range noise standard deviation in meters (must be >= 0)
     """
 
     def __init__(
@@ -41,6 +37,23 @@ class LiDAR(BaseSensor):
         **kwargs,
     ):
         super().__init__(name="lidar", rate=rate, noise_stddev=noise_stddev, **kwargs)
+        if channels < 1:
+            raise ValueError(f"channels must be >= 1, got {channels}")
+        if points_per_channel < 1:
+            raise ValueError(
+                f"points_per_channel must be >= 1, got {points_per_channel}"
+            )
+        if range_max <= 0:
+            raise ValueError(f"range_max must be > 0, got {range_max}")
+        if range_min < 0 or range_min >= range_max:
+            raise ValueError(
+                f"range_min ({range_min}) must be >= 0 and < range_max ({range_max})"
+            )
+        if fov_h <= 0:
+            raise ValueError(f"fov_h must be > 0, got {fov_h}")
+        if fov_v < 0:
+            raise ValueError(f"fov_v must be >= 0, got {fov_v}")
+
         self.channels = channels
         self.points_per_channel = points_per_channel
         self.range_max = range_max
@@ -48,20 +61,22 @@ class LiDAR(BaseSensor):
         self.fov_h = fov_h
         self.fov_v = fov_v
 
-        # Precompute ray directions
         self._ray_directions = self._compute_ray_directions()
 
-        # Latest scan data
-        self._ranges = []  # flat list of range values
-        self._points = []  # list of [x, y, z] points
-        self._intensities = []  # reflection intensity per point
+        self._ranges = []
+        self._points = []
+        self._intensities = []
 
-        # MuJoCo backend reference (set by simulation engine)
         self._mj_model = None
         self._mj_data = None
 
+    def reset(self):
+        """Clear scan data."""
+        self._ranges = []
+        self._points = []
+        self._intensities = []
+
     def _compute_ray_directions(self) -> List[Tuple[float, float, float]]:
-        """Precompute unit direction vectors for all rays."""
         directions = []
         h_step = math.radians(self.fov_h) / max(self.points_per_channel, 1)
         v_step = (
@@ -85,12 +100,10 @@ class LiDAR(BaseSensor):
         return directions
 
     def set_mujoco_backend(self, model, data):
-        """Connect to MuJoCo for raycasting (called by simulation engine)."""
         self._mj_model = model
         self._mj_data = data
 
     def read(self) -> Dict[str, Any]:
-        """Perform a scan and return range data."""
         if self._mj_model is not None and self._mj_data is not None:
             self._scan_mujoco()
         else:
@@ -104,7 +117,6 @@ class LiDAR(BaseSensor):
         }
 
     def _scan_mujoco(self):
-        """Raycast into MuJoCo scene for accurate range data."""
         try:
             import mujoco
             import numpy as np
@@ -115,9 +127,7 @@ class LiDAR(BaseSensor):
         self._ranges = []
         self._points = []
 
-        # Get sensor mount position from robot
-        # Default to origin if not determinable
-        mount_pos = np.array([0.0, 0.0, 1.0])  # default height
+        mount_pos = np.array([0.0, 0.0, 1.0])
 
         for dx, dy, dz in self._ray_directions:
             direction = np.array([dx, dy, dz])
@@ -128,9 +138,9 @@ class LiDAR(BaseSensor):
                 self._mj_data,
                 mount_pos,
                 direction,
-                None,  # geom group filter (None = all)
-                1,  # exclude static geoms flag
-                -1,  # bodyexclude
+                None,
+                1,
+                -1,
                 geom_id,
             )
 
@@ -139,9 +149,7 @@ class LiDAR(BaseSensor):
             elif dist < self.range_min:
                 dist = self.range_min
 
-            # Add noise
             dist = self.add_noise(dist)
-
             self._ranges.append(dist)
 
             if dist < self.range_max:
@@ -151,12 +159,10 @@ class LiDAR(BaseSensor):
                 self._points.append([px, py, pz])
 
     def _scan_synthetic(self):
-        """Generate synthetic scan data (no physics backend)."""
         self._ranges = []
         self._points = []
 
         for dx, dy, dz in self._ray_directions:
-            # Simulate a flat ground plane at z=0
             if dz < -0.01:
                 mount_height = 1.0
                 dist = mount_height / abs(dz)
@@ -171,13 +177,18 @@ class LiDAR(BaseSensor):
                 self._points.append([dx * dist, dy * dist, dz * dist])
 
     def get_ranges(self) -> List[float]:
-        """Get the latest range measurements."""
         return list(self._ranges)
 
     def get_point_cloud(self) -> List[List[float]]:
-        """Get the latest 3D point cloud."""
         return [list(p) for p in self._points]
 
     @property
     def num_rays(self) -> int:
         return self.channels * self.points_per_channel
+
+    def __repr__(self) -> str:
+        return (
+            f"LiDAR(name='{self.name}', channels={self.channels}, "
+            f"points_per_channel={self.points_per_channel}, "
+            f"range=[{self.range_min}, {self.range_max}]m, rate={self.rate}Hz)"
+        )

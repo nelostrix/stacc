@@ -1,6 +1,3 @@
-# ══════════════════════════════════════════
-# STEREO CAMERA
-# ══════════════════════════════════════════
 from __future__ import annotations
 
 from typing import Any, Dict, Tuple
@@ -13,10 +10,11 @@ class StereoCamera(BaseSensor):
     """Stereo camera pair for depth estimation.
 
     Args:
-        baseline: Distance between left and right cameras in meters
-        width: Image width per camera
-        height: Image height per camera
-        fov: Field of view in degrees
+        baseline: Distance between left and right cameras in meters (must be > 0)
+        width: Image width per camera (must be > 0)
+        height: Image height per camera (must be > 0)
+        fov: Field of view in degrees (must be in (0, 180))
+        rate: Frame rate in Hz
     """
 
     def __init__(
@@ -29,9 +27,17 @@ class StereoCamera(BaseSensor):
         **kwargs,
     ):
         super().__init__(name="stereo_camera", rate=rate, **kwargs)
+        if baseline <= 0:
+            raise ValueError(f"baseline must be > 0, got {baseline}")
+
         self.baseline = baseline
         self.left = Camera(width=width, height=height, fov=fov, rate=rate)
         self.right = Camera(width=width, height=height, fov=fov, rate=rate)
+
+    def reset(self):
+        """Reset both cameras."""
+        self.left.reset()
+        self.right.reset()
 
     def set_mujoco_backend(self, model, data):
         self.left.set_mujoco_backend(model, data)
@@ -49,3 +55,9 @@ class StereoCamera(BaseSensor):
     @property
     def resolution(self) -> Tuple[int, int]:
         return self.left.resolution
+
+    def __repr__(self) -> str:
+        return (
+            f"StereoCamera(name='{self.name}', baseline={self.baseline}m, "
+            f"resolution=({self.left.width}x{self.left.height}), rate={self.rate}Hz)"
+        )

@@ -12,8 +12,8 @@ class ForceTorqueSensor(BaseSensor):
     at a specific joint or link.
 
     Args:
-        range_force: Maximum measurable force in Newtons
-        range_torque: Maximum measurable torque in Nm
+        range_force: Maximum measurable force in N (must be > 0)
+        range_torque: Maximum measurable torque in Nm (must be > 0)
         rate: Sampling rate in Hz
     """
 
@@ -28,9 +28,18 @@ class ForceTorqueSensor(BaseSensor):
         super().__init__(
             name="force_torque", rate=rate, noise_stddev=noise_stddev, **kwargs
         )
+        if range_force <= 0:
+            raise ValueError(f"range_force must be > 0, got {range_force}")
+        if range_torque <= 0:
+            raise ValueError(f"range_torque must be > 0, got {range_torque}")
+
         self.range_force = range_force
         self.range_torque = range_torque
-        self._wrench = [0.0] * 6  # [Fx, Fy, Fz, Tx, Ty, Tz]
+        self._wrench = [0.0] * 6
+
+    def reset(self):
+        """Zero the wrench reading."""
+        self._wrench = [0.0] * 6
 
     def read(self) -> Dict[str, Any]:
         return {
@@ -44,3 +53,9 @@ class ForceTorqueSensor(BaseSensor):
 
     def get_torque(self) -> List[float]:
         return self.add_noise_vector(self._wrench[3:])
+
+    def __repr__(self) -> str:
+        return (
+            f"ForceTorqueSensor(name='{self.name}', range_force={self.range_force}N, "
+            f"range_torque={self.range_torque}Nm, rate={self.rate}Hz)"
+        )

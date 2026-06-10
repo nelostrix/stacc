@@ -34,8 +34,11 @@ class GPS(BaseSensor):
         self.origin_lat = origin_lat
         self.origin_lon = origin_lon
         self.origin_alt = origin_alt
+        self._position = [0.0, 0.0, 0.0]
 
-        self._position = [0.0, 0.0, 0.0]  # [x, y, z] in world frame
+    def reset(self):
+        """Reset GPS position to origin."""
+        self._position = [0.0, 0.0, 0.0]
 
     def read(self) -> Dict[str, Any]:
         noisy_position = self.add_noise_vector(self._position)
@@ -51,54 +54,14 @@ class GPS(BaseSensor):
         }
 
     def _xy_to_latlon(self, x: float, y: float) -> Tuple[float, float]:
-        """Convert local XY (meters) to lat/lon (degrees)."""
-        # Approximate conversion: 1 degree lat ≈ 111,320m
         lat = self.origin_lat + (y / 111320.0)
         lon = self.origin_lon + (
             x / (111320.0 * math.cos(math.radians(self.origin_lat)))
         )
         return lat, lon
 
-
-# ══════════════════════════════════════════
-# ULTRASONIC SENSOR
-# ══════════════════════════════════════════
-
-
-class Ultrasonic(BaseSensor):
-    """Ultrasonic range finder (e.g., HC-SR04).
-
-    Single-ray distance measurement along the sensor's forward axis.
-
-    Args:
-        range_max: Maximum range in meters (typical: 2-4m)
-        range_min: Minimum range in meters (typical: 0.02m)
-        beam_angle: Beam spread angle in degrees (typical: 15-30)
-        rate: Measurement rate in Hz
-    """
-
-    def __init__(
-        self,
-        range_max: float = 4.0,
-        range_min: float = 0.02,
-        beam_angle: float = 15.0,
-        rate: float = 40.0,
-        noise_stddev: float = 0.02,
-        **kwargs,
-    ):
-        super().__init__(
-            name="ultrasonic", rate=rate, noise_stddev=noise_stddev, **kwargs
+    def __repr__(self) -> str:
+        return (
+            f"GPS(name='{self.name}', origin=({self.origin_lat}, {self.origin_lon}, {self.origin_alt}), "
+            f"rate={self.rate}Hz)"
         )
-        self.range_max = range_max
-        self.range_min = range_min
-        self.beam_angle = beam_angle
-        self._distance = range_max
-
-    def read(self) -> Dict[str, float]:
-        return {
-            "distance": self.add_noise(self._distance),
-            "valid": self.range_min <= self._distance <= self.range_max,
-        }
-
-    def get_distance(self) -> float:
-        return self.add_noise(self._distance)

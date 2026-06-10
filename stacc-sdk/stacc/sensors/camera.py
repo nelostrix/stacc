@@ -13,9 +13,9 @@ class Camera(BaseSensor):
     Otherwise returns a blank image.
 
     Args:
-        width: Image width in pixels
-        height: Image height in pixels
-        fov: Field of view in degrees
+        width: Image width in pixels (must be > 0)
+        height: Image height in pixels (must be > 0)
+        fov: Field of view in degrees (must be > 0)
         rate: Frame rate in Hz
     """
 
@@ -28,17 +28,30 @@ class Camera(BaseSensor):
         **kwargs,
     ):
         super().__init__(name="camera", rate=rate, **kwargs)
+        if width <= 0:
+            raise ValueError(f"width must be > 0, got {width}")
+        if height <= 0:
+            raise ValueError(f"height must be > 0, got {height}")
+        if fov <= 0 or fov >= 180:
+            raise ValueError(f"fov must be in (0, 180), got {fov}")
+
         self.width = width
         self.height = height
         self.fov = fov
 
-        self._image = None  # numpy array (H, W, 3) uint8
+        self._image = None
+        self._mj_model = None
+        self._mj_data = None
+        self._mj_renderer = None
+
+    def reset(self):
+        """Clear camera image and backend references."""
+        self._image = None
         self._mj_model = None
         self._mj_data = None
         self._mj_renderer = None
 
     def set_mujoco_backend(self, model, data):
-        """Connect to MuJoCo for rendering."""
         self._mj_model = model
         self._mj_data = data
         try:
@@ -51,7 +64,6 @@ class Camera(BaseSensor):
             self._mj_renderer = None
 
     def read(self) -> Dict[str, Any]:
-        """Capture a frame."""
         if self._mj_renderer is not None:
             self._capture_mujoco()
         else:
@@ -65,7 +77,6 @@ class Camera(BaseSensor):
         }
 
     def _capture_mujoco(self):
-        """Render from MuJoCo scene."""
         try:
             import mujoco
 
@@ -75,7 +86,6 @@ class Camera(BaseSensor):
             self._capture_synthetic()
 
     def _capture_synthetic(self):
-        """Generate a blank/test image."""
         try:
             import numpy as np
 
@@ -84,9 +94,14 @@ class Camera(BaseSensor):
             self._image = None
 
     def get_image(self):
-        """Get the latest captured image as numpy array (H, W, 3)."""
         return self._image
 
     @property
     def resolution(self) -> Tuple[int, int]:
         return (self.width, self.height)
+
+    def __repr__(self) -> str:
+        return (
+            f"Camera(name='{self.name}', resolution=({self.width}x{self.height}), "
+            f"fov={self.fov}, rate={self.rate}Hz)"
+        )
