@@ -7,14 +7,30 @@ sensor simulation, and the user's control logic.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, List
 
 if TYPE_CHECKING:
     from stacc.core.robot_base import Robot
 
 
+_VALID_ENGINES = ("mujoco", "bullet", "internal")
+
+
 class SimulationConfig:
-    """Configuration for a simulation run."""
+    """Configuration for a simulation run.
+
+    Args:
+        duration: Simulation duration in seconds (must be > 0)
+        timestep: Physics timestep in seconds (must be > 0)
+        render: Whether to render the simulation visually
+        headless: Run without display (overrides render if True)
+        physics_engine: One of "mujoco", "bullet", "internal"
+        gravity: Gravity vector [x, y, z]
+        terrain: Terrain type string
+        realtime: Whether to sync with real time
+        record: Whether to record the simulation
+        record_path: Path for recording file
+    """
 
     def __init__(
         self,
@@ -23,24 +39,40 @@ class SimulationConfig:
         render: bool = True,
         headless: bool = False,
         physics_engine: str = "mujoco",
-        gravity: Optional[list] = None,
+        gravity: Optional[List[float]] = None,
         terrain: str = "flat_ground",
         realtime: bool = True,
         record: bool = False,
         record_path: Optional[str] = None,
         **kwargs,
     ):
+        if duration <= 0:
+            raise ValueError(f"duration must be > 0, got {duration}")
+        if timestep <= 0:
+            raise ValueError(f"timestep must be > 0, got {timestep}")
+        pe = physics_engine.lower()
+        if pe not in _VALID_ENGINES:
+            raise ValueError(
+                f"physics_engine must be one of {_VALID_ENGINES}, got '{physics_engine}'"
+            )
+
         self.duration = duration
         self.timestep = timestep
         self.render = render and not headless
         self.headless = headless
-        self.physics_engine = physics_engine
+        self.physics_engine = pe
         self.gravity = gravity or [0, 0, -9.81]
         self.terrain = terrain
         self.realtime = realtime
         self.record = record
         self.record_path = record_path
         self.extra = kwargs
+
+    def __repr__(self) -> str:
+        return (
+            f"SimulationConfig(duration={self.duration}s, timestep={self.timestep}s, "
+            f"engine='{self.physics_engine}')"
+        )
 
 
 class SimulationState:
@@ -54,6 +86,22 @@ class SimulationState:
         self.fps: float = 0.0
         self.physics_time_ms: float = 0.0
         self.render_time_ms: float = 0.0
+
+    def reset(self):
+        """Reset simulation state to initial values."""
+        self.time = 0.0
+        self.step = 0
+        self.running = False
+        self.paused = False
+        self.fps = 0.0
+        self.physics_time_ms = 0.0
+        self.render_time_ms = 0.0
+
+    def __repr__(self) -> str:
+        return (
+            f"SimulationState(time={self.time:.1f}s, step={self.step}, "
+            f"running={self.running}, paused={self.paused})"
+        )
 
 
 class SimulationEngine:
@@ -74,9 +122,14 @@ class SimulationEngine:
         self._physics_backend = None
         self._renderer = None
 
+    def reset(self):
+        """Reset engine state and clear physics backend."""
+        self.state.reset()
+        self._physics_backend = None
+        self._renderer = None
+
     def _init_physics(self):
-        """Initialize the physics backend."""
-        engine = self.config.physics_engine.lower()
+        engine = self.config.physics_engine
 
         if engine == "mujoco":
             try:
@@ -123,30 +176,24 @@ class SimulationEngine:
 
                 step_start = time.time()
 
-                # Step physics
                 self._physics_backend.step(self.config.timestep)
 
-                # Update sensors
                 for sensor in self.robot.sensors:
                     if sensor.enabled and sensor.should_update(self.state.time):
                         sensor.read()
 
-                # Run user control loop
                 self.robot._tick(self.config.timestep)
 
-                # Update state
                 self.state.time += self.config.timestep
                 self.state.step = step
                 self.state.physics_time_ms = (time.time() - step_start) * 1000
 
-                # Real-time sync
                 if self.config.realtime and not self.config.headless:
                     elapsed = time.time() - wall_start
                     sim_time = self.state.time
                     if sim_time > elapsed:
                         time.sleep(sim_time - elapsed)
 
-                # FPS calculation
                 if step > 0 and step % 1000 == 0:
                     elapsed = time.time() - wall_start
                     self.state.fps = step / elapsed if elapsed > 0 else 0
@@ -180,6 +227,13 @@ class SimulationEngine:
     def stop(self):
         self.state.running = False
 
+    def __repr__(self) -> str:
+        return (
+            f"SimulationEngine(robot='{self.robot.name}', "
+            f"engine='{self.config.physics_engine}', "
+            f"state={'running' if self.state.running else 'idle'})"
+        )
+
 
 class _InternalPhysics:
     """Minimal internal physics engine (used when MuJoCo/Bullet unavailable).
@@ -192,22 +246,22 @@ class _InternalPhysics:
         self.robot = robot
         self.gravity = config.gravity
 
+    def reset(self):
+        """No state to reset for internal physics."""
+
     def step(self, dt: float):
-        """Euler integration step."""
         state = self.robot._state
         for i in range(len(state["joint_positions"])):
-            # Simple: apply torque as acceleration (mass=1 assumption)
             accel = state["joint_torques"][i]
             state["joint_velocities"][i] += accel * dt
             state["joint_positions"][i] += state["joint_velocities"][i] * dt
 
-            # Clamp to joint limits
             if i < len(self.robot.joints):
                 joint = self.robot.joints[i]
                 state["joint_positions"][i] = joint.clamp(state["joint_positions"][i])
 
-
-# ── Module-level convenience function ──
+    def __repr__(self) -> str:
+        return f"_InternalPhysics(robot='{self.robot.name}', gravity={self.gravity})"
 
 
 def simulate(

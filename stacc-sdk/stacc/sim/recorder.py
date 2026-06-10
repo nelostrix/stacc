@@ -79,6 +79,12 @@ class SimFrame:
             sensor_data=d.get("sensor_data", {}),
         )
 
+    def __repr__(self) -> str:
+        return (
+            f"SimFrame(t={self.time:.3f}s, "
+            f"joints={len(self.joint_positions)})"
+        )
+
 
 class SimRecording:
     """A complete simulation recording."""
@@ -127,6 +133,12 @@ class SimRecording:
     def get_time_series(self) -> List[float]:
         return [f.time for f in self.frames]
 
+    def __repr__(self) -> str:
+        return (
+            f"SimRecording(robot='{self.robot_name}', "
+            f"frames={self.num_frames}, duration={self.duration:.1f}s)"
+        )
+
 
 class SimRecorder:
     """Records simulation data during a run.
@@ -144,7 +156,17 @@ class SimRecorder:
         recorder.save("recording.json")
     """
 
-    def __init__(self, robot, record_every: int = 1, record_sensors: bool = False):
+    def __init__(
+        self,
+        robot,
+        record_every: int = 1,
+        record_sensors: bool = False,
+    ):
+        if record_every < 1:
+            raise ValueError(
+                f"record_every must be >= 1, got {record_every}"
+            )
+
         self.robot = robot
         self.record_every = record_every
         self.record_sensors = record_sensors
@@ -162,7 +184,6 @@ class SimRecorder:
             for sensor in self.robot.sensors:
                 try:
                     data = sensor.read()
-                    # Only record serializable data
                     clean = {}
                     for k, v in data.items():
                         if isinstance(v, (int, float, str, bool)):
@@ -222,6 +243,13 @@ class SimRecorder:
     def reset(self):
         self.recording = SimRecording(self.robot.name)
         self._step_count = 0
+
+    def __repr__(self) -> str:
+        return (
+            f"SimRecorder(robot='{self.robot.name}', "
+            f"frames={self.recording.num_frames}, "
+            f"record_every={self.record_every})"
+        )
 
 
 def load_recording(filepath: str) -> SimRecording:

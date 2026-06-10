@@ -50,6 +50,11 @@ class WorldObject:
         friction: float = 1.0,
         euler: Optional[List[float]] = None,
     ):
+        if mass < 0:
+            raise ValueError(f"mass must be >= 0, got {mass}")
+        if friction < 0:
+            raise ValueError(f"friction must be >= 0, got {friction}")
+
         self.name = name
         self.shape = shape
         self.pos = pos
@@ -61,13 +66,32 @@ class WorldObject:
         self.friction = friction
         self.euler = euler or [0, 0, 0]
 
+    def __repr__(self) -> str:
+        return (
+            f"WorldObject('{self.name}', shape='{self.shape}', "
+            f"pos={self.pos}, mass={self.mass})"
+        )
+
 
 class Terrain:
-    """Terrain configuration for the simulation ground."""
+    """Terrain configuration for the simulation ground.
+
+    Args:
+        terrain_type: One of "flat", "heightmap", "slopes", "stairs"
+    """
+
+    VALID_TYPES = ("flat", "heightmap", "slopes", "stairs")
 
     def __init__(self, terrain_type: str = "flat", **kwargs):
+        if terrain_type not in self.VALID_TYPES:
+            raise ValueError(
+                f"terrain_type must be one of {self.VALID_TYPES}, got '{terrain_type}'"
+            )
         self.terrain_type = terrain_type
         self.params = kwargs
+
+    def __repr__(self) -> str:
+        return f"Terrain(type='{self.terrain_type}', params={self.params})"
 
     @classmethod
     def flat(cls, size: float = 10.0, color: Optional[List[float]] = None) -> "Terrain":
@@ -143,6 +167,8 @@ class World:
         friction: float = 1.0,
         euler: Optional[List[float]] = None,
     ) -> "World":
+        if any(s <= 0 for s in size):
+            raise ValueError(f"box size must all be > 0, got {size}")
         self.objects.append(
             WorldObject(
                 name,
@@ -165,6 +191,8 @@ class World:
         mass: float = 0.0,
         color: Optional[List[float]] = None,
     ) -> "World":
+        if radius <= 0:
+            raise ValueError(f"radius must be > 0, got {radius}")
         self.objects.append(
             WorldObject(name, "sphere", pos, radius=radius, mass=mass, color=color)
         )
@@ -179,6 +207,10 @@ class World:
         mass: float = 0.0,
         color: Optional[List[float]] = None,
     ) -> "World":
+        if radius <= 0:
+            raise ValueError(f"radius must be > 0, got {radius}")
+        if length <= 0:
+            raise ValueError(f"length must be > 0, got {length}")
         self.objects.append(
             WorldObject(
                 name,
@@ -237,6 +269,12 @@ class World:
             }
         )
         return self
+
+    def __repr__(self) -> str:
+        return (
+            f"World('{self.name}', objects={len(self.objects)}, "
+            f"terrain='{self.terrain.terrain_type}', lights={len(self.lights)})"
+        )
 
     def to_mjcf_elements(self) -> List[Dict[str, Any]]:
         """Convert world objects to MJCF-compatible element descriptions.

@@ -34,6 +34,15 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+_VALID_ACTION_MODES = ("torque", "position")
+_VALID_OBS_COMPONENTS = (
+    "joint_positions",
+    "joint_velocities",
+    "joint_torques",
+    "pose",
+    "time",
+)
+
 try:
     import numpy as np
 
@@ -110,6 +119,25 @@ class StaccEnv:
     ):
         if not HAS_NUMPY:
             raise ImportError("numpy is required for RL environments")
+        if max_steps < 1:
+            raise ValueError(f"max_steps must be >= 1, got {max_steps}")
+        if dt <= 0:
+            raise ValueError(f"dt must be > 0, got {dt}")
+        if action_mode not in _VALID_ACTION_MODES:
+            raise ValueError(
+                f"action_mode must be one of {_VALID_ACTION_MODES}, got '{action_mode}'"
+            )
+        if obs_includes is not None:
+            for c in obs_includes:
+                if c not in _VALID_OBS_COMPONENTS:
+                    raise ValueError(
+                        f"Unknown obs_includes component '{c}'. "
+                        f"Valid: {_VALID_OBS_COMPONENTS}"
+                    )
+        if obs_noise < 0:
+            raise ValueError(f"obs_noise must be >= 0, got {obs_noise}")
+        if not robot.joints:
+            raise ValueError("robot must have at least one joint")
 
         self.robot = robot
         self.reward_fn = reward_fn or self._default_reward
@@ -401,6 +429,13 @@ class StaccEnv:
     @property
     def spec(self):
         return None
+
+    def __repr__(self) -> str:
+        return (
+            f"StaccEnv(robot='{self.robot.name}', "
+            f"action_mode='{self.action_mode}', "
+            f"max_steps={self.max_steps}, dt={self.dt}s)"
+        )
 
 
 # ══════════════════════════════════════════

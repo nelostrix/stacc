@@ -104,6 +104,16 @@ All core commands implemented:
 - `DifferentialDrive` — 2-wheel mobile robot with speed, velocity, and heading control
 - `SerialManipulator` — N-DOF arm with FK, IK, Jacobian via DH parameters
 
+### Simulation Module
+- `SimulationEngine` — main simulation loop with physics stepping, sensor updates, and control
+- `SimulationConfig` — configurable duration, timestep, physics engine, gravity, terrain, recording
+- `MuJoCoBackend` — MuJoCo physics via MJCF conversion with viewer
+- `_InternalPhysics` — minimal Euler-integrator fallback for testing
+- `World` / `WorldObject` / `Terrain` — simulation environment with boxes, spheres, cylinders, walls, stairs, heightmaps
+- `SimRecorder` / `SimRecording` / `SimFrame` — record, save/load JSON/CSV, replay simulations
+- `StaccEnv` — Gymnasium-compatible RL environment with torque and position action modes
+- 5 pre-built worlds: warehouse, obstacle course, tabletop, mars, empty
+
 ### Sensor Module
 - `IMU` — 9-axis accelerometer + gyroscope + magnetometer with fused orientation
 - `Camera` — RGB camera with synthetic/MuJoCo rendering
@@ -152,6 +162,7 @@ All core commands implemented:
 - [x] Core robot model — DifferentialDrive, SerialManipulator, Robot base, Joint, Link
 - [x] Kinematics engine (FK, IK, trajectory generation)
 - [x] Sensor module — IMU, cameras, LiDAR, GPS, ultrasonic, encoder, IR, F/T, barometer, temperature, contact
+- [x] Simulation module — physics backends, MJCF builder, worlds, recording, RL environments
 - [ ] MuJoCo simulation backend
 - [ ] Hardware abstraction layer
 - [ ] Sensor simulation

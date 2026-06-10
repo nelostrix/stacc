@@ -80,6 +80,34 @@
 - Added `reset()` method to zero both wheel speeds
 - Added `__repr__()` with key dimensions
 
+### `stacc.sim` — Full module overhaul
+
+**`mujoco_backend.py`** — `MuJoCoBackend` class:
+- **Critical bug fix**: `close()` method was indented inside `step()`, making it unreachable
+- Added `reset()` method to reset MuJoCo model state
+- Added `__repr__()` with robot name, joint count, and viewer status
+
+**`engine.py`** — `SimulationConfig`, `SimulationState`, `SimulationEngine`, `_InternalPhysics`:
+- Added input validation (`duration > 0`, `timestep > 0`, `physics_engine` one of mujoco/bullet/internal)
+- Added `reset()` on `SimulationState` and `SimulationEngine`
+- Added `__repr__()` on all four classes
+
+**`world.py`** — `WorldObject`, `Terrain`, `World` classes:
+- Added input validation (`mass >= 0`, `friction >= 0`, box/sphere/cylinder dimension checks)
+- Added `Terrain` type validation (flat/heightmap/slopes/stairs only)
+- Added `__repr__()` on all three classes
+
+**`recorder.py`** — `SimFrame`, `SimRecording`, `SimRecorder`:
+- Added input validation (`record_every >= 1`)
+- Added `__repr__()` on all three classes
+
+**`gym_env.py`** — `StaccEnv` class:
+- Added input validation (`max_steps >= 1`, `dt > 0`, `action_mode`, `obs_includes`, `obs_noise >= 0`, robot must have joints)
+- Added `__repr__()` with robot name, action mode, and step count
+
+**`__init__.py`** — Expanded exports:
+- Added `SimulationState`, `World`, `WorldObject`, `Terrain`, `SimRecorder`, `SimRecording`, `SimFrame`, `load_recording`, `replay_recording`, `StaccEnv`, `reach_target_reward`, `balance_reward`, `locomotion_reward`
+
 **`serial_manipulator.py`** — `SerialManipulator` class:
 - Added input validation: `dh_parameters` type-checked as list of `DH` objects, `joint_limits` length/ordering validated
 - Added `reset()` method to zero all joint positions
