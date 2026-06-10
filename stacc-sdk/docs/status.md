@@ -60,6 +60,31 @@ All core commands implemented:
 - Live telemetry
 - Node editor
 
+### Control Module
+- `PIDController` + `CascadedPID` with anti-windup, deadband, output limits
+- `Feedforward` with velocity/acceleration/static terms
+- `GravityCompensation` for serial manipulators
+- `FrictionModel` — Coulomb + viscous friction
+- `LowPassFilter`, `MovingAverageFilter`, `ComplementaryFilter`
+- `KalmanFilter1D` for optimal recursive estimation
+- `NotchFilter` for frequency-specific noise removal
+- `RateLimiter`, `AccelerationLimiter` for smooth setpoint tracking
+- `SCurveProfile` — jerk-limited trajectory generation
+- `ControllerPipeline` with named `ControllerStage`s, enable/disable, conditional skip
+
+### AI Module
+- `EKFSLAM`, `ParticleFilterSLAM` — full implementations with motion/update/resample
+- `ICPMatcher` — scan-to-scan matching with SVD
+- `OccupancyGridMapper` — log-odds grid with Bresenham ray tracing
+- `SLAMNavigator` — high-level interface connecting sensors to SLAM
+- `AStarPlanner`, `DijkstraPlanner` — grid-based optimal search
+- `RRTStarPlanner` — sampling-based planning with rewiring
+- `PotentialFieldPlanner` — reactive obstacle avoidance
+- `Sequence`, `Selector`, `Parallel` composites + full decorator set
+- `CommandParser` — 30+ regex patterns for natural language robot control
+- `ActionMapper` + `SpeechInterface` — text/speech to robot actions
+- `ObjectDetector` (OpenCV/ONNX/Torch), `VisualOdometry`, `StereoDepthEstimator`
+
 ## Coming Soon
 
 - Core robot model (joints, links, URDF parsing)
@@ -73,6 +98,8 @@ All core commands implemented:
 
 - [x] CLI framework with all commands
 - [x] GUI platform prototype
+- [x] Control module — PID, filters, feedforward, limiters, pipelines
+- [x] AI module — SLAM, path planning, behavior trees, NLP, vision
 - [ ] Core robot model (joints, links, URDF)
 - [ ] Kinematics engine (FK, IK, dynamics)
 - [ ] MuJoCo simulation backend

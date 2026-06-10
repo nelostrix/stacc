@@ -62,11 +62,23 @@ stacc/
 - DART support
 - Rendering with OpenGL
 
+### Control (control/)
+- `PIDController` + `CascadedPID` — with anti-windup, deadband, output limits
+- `Feedforward` — velocity/acceleration/static feedforward
+- `GravityCompensation` — torque computation for serial manipulators
+- `FrictionModel` — Coulomb + viscous friction
+- `LowPassFilter`, `MovingAverageFilter`, `ComplementaryFilter`, `KalmanFilter1D`, `NotchFilter`
+- `RateLimiter`, `AccelerationLimiter`, `SCurveProfile` — smooth setpoint tracking with jerk limits
+- `ControllerPipeline` — composable named stages with enable/disable and conditional skip
+
 ### AI/Perception (ai/)
-- SLAM implementations (EKF, FastSLAM, ORB-SLAM)
-- Path planning (RRT*, A*, D*, potential fields)
-- Reinforcement learning (PPO, SAC, TD3)
-- Object detection and depth perception
+- SLAM implementations (EKF-SLAM, FastSLAM, ICP, Occupancy Grid)
+- Path planning (RRT*, A*, Dijkstra, potential fields)
+- Behavior trees — Sequence, Selector, Parallel, Repeat, Timeout, Retry
+- Natural language command parsing — 30+ regex patterns for robot control
+- Speech interface — speech-to-text pipeline
+- Object detection (OpenCV/ONNX/Torch), feature extraction, optical flow
+- Visual odometry, stereo depth estimation, ArUco marker detection
 
 ## GUI Platform
 

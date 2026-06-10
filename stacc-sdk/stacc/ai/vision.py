@@ -604,6 +604,11 @@ class VisualOdometry:
                 self._total_R = R @ self._total_R
                 self._total_t = self._total_t + self._total_R @ t
         else:
+            print(
+                "  [vo] No camera_matrix provided. Provide a calibrated camera matrix "
+                "for metric 3D visual odometry. Falling back to 2D homography "
+                "(x, y only, no scale)."
+            )
             H, mask = cv2.findHomography(pts1, pts2, cv2.RANSAC, 5.0)
             if H is not None:
                 dx = float(H[0, 2])

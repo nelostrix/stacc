@@ -50,10 +50,10 @@ class Node:
     def tick(self, dt: float = 0.0) -> Status:
         raise NotImplementedError
 
-    def reset(self):
+    def reset(self) -> None:
         self.status = Status.RUNNING
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.__class__.__name__}('{self.name}', {self.status.value})"
 
 
@@ -124,7 +124,7 @@ class Wait(Node):
             self.status = Status.RUNNING
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         self._elapsed = 0.0
 
@@ -160,7 +160,7 @@ class Sequence(Node):
         self.status = Status.SUCCESS
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         self._current = 0
         for child in self.children:
@@ -198,7 +198,7 @@ class Selector(Node):
         self.status = Status.FAILURE
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         self._current = 0
         for child in self.children:
@@ -254,7 +254,7 @@ class Parallel(Node):
 
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         for child in self.children:
             child.reset()
@@ -293,7 +293,7 @@ class Repeat(Node):
         self.status = Status.RUNNING
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         self._completed = 0
         self.child.reset()
@@ -317,7 +317,7 @@ class Invert(Node):
             self.status = Status.RUNNING
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         self.child.reset()
 
@@ -341,7 +341,7 @@ class Timeout(Node):
         self.status = self.child.tick(dt)
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         self._elapsed = 0.0
         self.child.reset()
@@ -372,7 +372,7 @@ class Retry(Node):
         self.status = result
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         self._retries = 0
         self.child.reset()
@@ -394,6 +394,6 @@ class AlwaysSucceed(Node):
             self.status = Status.SUCCESS
         return self.status
 
-    def reset(self):
+    def reset(self) -> None:
         super().reset()
         self.child.reset()
