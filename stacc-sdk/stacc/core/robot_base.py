@@ -92,6 +92,7 @@ class Robot:
         self.joints: List[Joint] = []
         self.sensors: List[Any] = []
         self.end_effectors: List[Any] = []
+        self.actuators: List[Any] = []
         self.time: float = 0.0
         self.dt: float = 0.001
 

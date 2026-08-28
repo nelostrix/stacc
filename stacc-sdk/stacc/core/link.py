@@ -70,6 +70,13 @@ class Inertia:
             "ixy": self.ixy, "ixz": self.ixz, "iyz": self.iyz,
         }
 
+    @classmethod
+    def from_dict(cls, d: Dict[str, float]) -> "Inertia":
+        return cls(
+            ixx=d.get("ixx", 0.001), iyy=d.get("iyy", 0.001), izz=d.get("izz", 0.001),
+            ixy=d.get("ixy", 0.0), ixz=d.get("ixz", 0.0), iyz=d.get("iyz", 0.0),
+        )
+
 
 class Geometry:
     """Visual or collision geometry for a link.
@@ -110,6 +117,19 @@ class Geometry:
             d["mesh_path"] = self.mesh_path
             d["mesh_scale"] = self.mesh_scale
         return d
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Geometry":
+        return cls(
+            shape=d.get("shape", "box"),
+            size=d.get("size"),
+            radius=d.get("radius"),
+            length=d.get("length"),
+            mesh_path=d.get("mesh_path"),
+            mesh_scale=d.get("mesh_scale"),
+            origin=d.get("origin"),
+            color=d.get("color"),
+        )
 
 
 class Link:
@@ -157,6 +177,19 @@ class Link:
         if self.collision:
             d["collision"] = self.collision.to_dict()
         return d
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Link":
+        visual = Geometry.from_dict(d["visual"]) if d.get("visual") else None
+        collision = Geometry.from_dict(d["collision"]) if d.get("collision") else None
+        return cls(
+            name=d["name"],
+            mass=d.get("mass", 1.0),
+            inertia=Inertia.from_dict(d["inertia"]) if d.get("inertia") else None,
+            visual=visual,
+            collision=collision,
+            origin=d.get("origin"),
+        )
 
     def __repr__(self) -> str:
         return f"Link('{self.name}', mass={self.mass}kg)"

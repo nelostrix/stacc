@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 import mujoco
 import mujoco.viewer
 
+from stacc.sim.backend import PhysicsBackend, register_backend
 from stacc.sim.mjcf_builder import robot_to_mjcf
 
 if TYPE_CHECKING:
@@ -18,13 +19,22 @@ if TYPE_CHECKING:
     from stacc.sim.engine import SimulationConfig
 
 
-class MuJoCoBackend:
+class MuJoCoBackend(PhysicsBackend):
     """MuJoCo physics backend wrapping a robot simulation.
 
     Args:
         robot: A stacc Robot instance
         config: Simulation configuration
     """
+
+    @classmethod
+    def is_available(cls) -> bool:
+        try:
+            import mujoco  # noqa: F401
+
+            return True
+        except ImportError:
+            return False
 
     def __init__(self, robot: "Robot", config: "SimulationConfig"):
         self.robot = robot
@@ -98,3 +108,6 @@ class MuJoCoBackend:
             f"MuJoCoBackend(robot='{self.robot.name}', "
             f"joints={len(self._joint_map)}, viewer={'open' if self.viewer else 'closed'})"
         )
+
+
+register_backend("mujoco", MuJoCoBackend)

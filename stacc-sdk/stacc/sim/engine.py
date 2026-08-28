@@ -7,13 +7,26 @@ sensor simulation, and the user's control logic.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional, List
+from typing import TYPE_CHECKING, Optional, List
+
+from stacc.sim.backend import PhysicsBackend, get_backend, register_backend
 
 if TYPE_CHECKING:
     from stacc.core.robot_base import Robot
 
-
-_VALID_ENGINES = ("mujoco", "bullet", "internal")
+# Optional backends self-register on import (see stacc/sim/backend.py) — a
+# missing dependency just means they don't show up in the registry, not an
+# error. Adding a new backend means adding an import here (or anywhere
+# executed before _init_physics runs) and calling register_backend once;
+# it never requires touching _init_physics itself.
+try:
+    import stacc.sim.mujoco_backend  # noqa: F401
+except ImportError:
+    pass
+try:
+    import stacc.sim.bullet_backend  # noqa: F401
+except ImportError:
+    pass
 
 
 class SimulationConfig:
@@ -50,11 +63,12 @@ class SimulationConfig:
             raise ValueError(f"duration must be > 0, got {duration}")
         if timestep <= 0:
             raise ValueError(f"timestep must be > 0, got {timestep}")
+        # No fixed enum of engine names here on purpose: which names are
+        # valid is a property of what's registered in stacc.sim.backend,
+        # not something this config class should hardcode. An unknown or
+        # unavailable name falls back to "internal" at engine init time
+        # with a clear log message, rather than failing config construction.
         pe = physics_engine.lower()
-        if pe not in _VALID_ENGINES:
-            raise ValueError(
-                f"physics_engine must be one of {_VALID_ENGINES}, got '{physics_engine}'"
-            )
 
         self.duration = duration
         self.timestep = timestep
@@ -129,28 +143,21 @@ class SimulationEngine:
         self._renderer = None
 
     def _init_physics(self):
-        engine = self.config.physics_engine
+        name = self.config.physics_engine
 
-        if engine == "mujoco":
+        if name != "internal":
             try:
-                from stacc.sim.mujoco_backend import MuJoCoBackend
+                backend_cls = get_backend(name)
+                if not backend_cls.is_available():
+                    raise ImportError(f"'{name}' backend is registered but not usable")
+                self._physics_backend = backend_cls(self.robot, self.config)
+                return
+            except KeyError:
+                print(f"  [sim] no backend registered for '{name}', falling back to internal physics")
+            except ImportError as e:
+                print(f"  [sim] {e}, falling back to internal physics")
 
-                self._physics_backend = MuJoCoBackend(self.robot, self.config)
-            except ImportError:
-                print(f"  [sim] MuJoCo not available, falling back to internal physics")
-                self._physics_backend = _InternalPhysics(self.robot, self.config)
-        elif engine == "bullet":
-            try:
-                from stacc.sim.bullet_backend import BulletBackend
-
-                self._physics_backend = BulletBackend(self.robot, self.config)
-            except ImportError:
-                print(
-                    f"  [sim] PyBullet not available, falling back to internal physics"
-                )
-                self._physics_backend = _InternalPhysics(self.robot, self.config)
-        else:
-            self._physics_backend = _InternalPhysics(self.robot, self.config)
+        self._physics_backend = _InternalPhysics(self.robot, self.config)
 
     def run(self):
         """Run the simulation for the configured duration."""
@@ -235,11 +242,13 @@ class SimulationEngine:
         )
 
 
-class _InternalPhysics:
-    """Minimal internal physics engine (used when MuJoCo/Bullet unavailable).
+class _InternalPhysics(PhysicsBackend):
+    """Minimal internal physics engine — always available, zero dependencies.
 
     This is a simple Euler integrator for basic testing. Not physically
-    accurate — use MuJoCo or Bullet for real simulation.
+    accurate — use MuJoCo or another real backend for real simulation. Its
+    job is to guarantee `stacc.simulate()` never hard-fails just because no
+    physics engine is installed, not to be a credible physics fallback.
     """
 
     def __init__(self, robot: "Robot", config: SimulationConfig):
@@ -262,6 +271,9 @@ class _InternalPhysics:
 
     def __repr__(self) -> str:
         return f"_InternalPhysics(robot='{self.robot.name}', gravity={self.gravity})"
+
+
+register_backend("internal", _InternalPhysics)
 
 
 def simulate(

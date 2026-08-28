@@ -110,7 +110,24 @@ class Joint:
             "max_effort": self.max_effort,
             "damping": self.damping,
             "friction": self.friction,
+            "origin": self.origin,
         }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Joint":
+        return cls(
+            name=d["name"],
+            type=d.get("type", "revolute"),
+            parent_link=d.get("parent_link"),
+            child_link=d.get("child_link"),
+            axis=d.get("axis"),
+            limits=tuple(d["limits"]) if d.get("limits") is not None else None,
+            max_velocity=d.get("max_velocity", 10.0),
+            max_effort=d.get("max_effort", 100.0),
+            damping=d.get("damping", 0.0),
+            friction=d.get("friction", 0.0),
+            origin=d.get("origin"),
+        )
 
     def __repr__(self) -> str:
         lim = f"[{self.limits[0]:.2f}, {self.limits[1]:.2f}]" if self.type != "continuous" else "[-inf, inf]"
