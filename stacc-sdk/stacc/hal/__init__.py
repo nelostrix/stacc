@@ -1,25 +1,4 @@
-"""stacc.hal — Hardware Abstraction Layer.
-
-Provides a universal interface for hardware control across all supported
-platforms (Raspberry Pi, Jetson, Arduino, ESP32, STM32, and more).
-
-Includes:
-- Board detection and configuration (``Board.detect()``)
-- Board definitions database with pin mappings (``get_board()``, ``list_boards()``)
-- GPIO, I2C, SPI, UART/Serial communication
-- Motor drivers for DC motors, servos, steppers
-- Project deployment via SSH
-- Firmware upload for microcontrollers
-
-Usage:
-    from stacc.hal import Board, GPIO, I2CBus, SPIBus, SerialPort
-    from stacc.hal import MotorDriver, ServoDriver, Deployer
-
-    board = Board.detect()
-    gpio = GPIO()
-    gpio.setup(18, GPIO.OUTPUT)
-    gpio.write(18, GPIO.HIGH)
-"""
+"""stacc.hal — Hardware Abstraction Layer (HAL) & Industrial Fieldbus Interfaces."""
 
 from stacc.hal.board import Board
 from stacc.hal.boards import (
@@ -35,6 +14,9 @@ from stacc.hal.i2c import I2CBus
 from stacc.hal.motor import MotorDriver, ServoDriver
 from stacc.hal.serial_comm import SerialPort
 from stacc.hal.spi import SPIBus
+from stacc.hal.can import CANBus, CANFrame, ODriveCAN, UnitreeMotorCAN
+from stacc.hal.shm import SharedMemoryRingBuffer
+from stacc.hal.ethercat import EtherCATSlaveCiA402, CiA402State
 
 __all__ = [
     "Board",
@@ -50,4 +32,11 @@ __all__ = [
     "ServoDriver",
     "SerialPort",
     "SPIBus",
+    "CANBus",
+    "CANFrame",
+    "ODriveCAN",
+    "UnitreeMotorCAN",
+    "SharedMemoryRingBuffer",
+    "EtherCATSlaveCiA402",
+    "CiA402State",
 ]

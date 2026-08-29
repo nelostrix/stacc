@@ -102,3 +102,11 @@ __all__ = [
     "Retry",
     "AlwaysSucceed",
 ]
+
+from stacc.ai.vla import VLATaskGrounder
+from stacc.ai.learning import VisuomotorPolicyRuntime
+
+__all__ += [
+    "VLATaskGrounder",
+    "VisuomotorPolicyRuntime",
+]

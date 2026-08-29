@@ -1,4 +1,4 @@
-"""stacc.control — Controllers for robotics."""
+"""stacc.control — Modern Robotics Control Suite."""
 
 from stacc.control.feedforward import Feedforward, FrictionModel, GravityCompensation
 from stacc.control.filters import (
@@ -16,6 +16,12 @@ from stacc.control.wrapper import (
     LimitedController,
     PIDWithFeedforward,
 )
+from stacc.control.mpc import LinearMPC
+from stacc.control.impedance import CartesianImpedanceController
+from stacc.control.operational_space import OperationalSpaceController
+from stacc.control.lqr import lqr, LQRController, solve_discrete_are
+from stacc.control.cbf import ControlBarrierFilter
+from stacc.control.wbc import HierarchicalWBC, TaskObjective
 
 __all__ = [
     "PIDController",
@@ -36,4 +42,13 @@ __all__ = [
     "RateLimiter",
     "AccelerationLimiter",
     "SCurveProfile",
+    "LinearMPC",
+    "CartesianImpedanceController",
+    "OperationalSpaceController",
+    "lqr",
+    "LQRController",
+    "solve_discrete_are",
+    "ControlBarrierFilter",
+    "HierarchicalWBC",
+    "TaskObjective",
 ]
