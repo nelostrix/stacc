@@ -64,6 +64,13 @@ def _geom_attrs(link, color_index: int) -> dict:
         "mass": str(link.mass),
     }
 
+    # Optional MuJoCo collision filtering (e.g. self-collision-free chains).
+    geo = link.visual
+    if getattr(geo, "contype", None) is not None:
+        attrs["contype"] = str(geo.contype)
+    if getattr(geo, "conaffinity", None) is not None:
+        attrs["conaffinity"] = str(geo.conaffinity)
+
     if link.visual is None:
         attrs["type"] = "box"
         attrs["size"] = "0.03 0.03 0.03"

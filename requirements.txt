@@ -21,3 +21,9 @@ SpeechRecognition>=3.10.0
 
 # SSH deploy (optional — needed for stacc.hal.deploy)
 paramiko>=3.0.0
+
+# Server (optional — needed for "stacc serve --fastapi"; the stdlib REST
+# bridge at "stacc serve" works without any of these)
+fastapi>=0.110.0
+uvicorn>=0.29.0
+websockets>=12.0

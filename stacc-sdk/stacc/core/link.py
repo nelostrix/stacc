@@ -94,6 +94,8 @@ class Geometry:
         mesh_scale: Optional[List[float]] = None,
         origin: Optional[List[float]] = None,
         color: Optional[List[float]] = None,
+        contype: Optional[int] = None,
+        conaffinity: Optional[int] = None,
     ):
         self.shape = shape  # "box", "cylinder", "sphere", "mesh"
         self.size = size or [0.1, 0.1, 0.1]
@@ -103,6 +105,9 @@ class Geometry:
         self.mesh_scale = mesh_scale or [1.0, 1.0, 1.0]
         self.origin = origin or [0, 0, 0, 0, 0, 0]
         self.color = color or [0.7, 0.7, 0.7, 1.0]  # RGBA
+        # MuJoCo collision filtering (None = default, contacts enabled).
+        self.contype = contype
+        self.conaffinity = conaffinity
 
     def to_dict(self) -> Dict[str, Any]:
         d = {"shape": self.shape, "origin": self.origin, "color": self.color}
@@ -116,6 +121,10 @@ class Geometry:
         elif self.shape == "mesh":
             d["mesh_path"] = self.mesh_path
             d["mesh_scale"] = self.mesh_scale
+        if self.contype is not None:
+            d["contype"] = self.contype
+        if self.conaffinity is not None:
+            d["conaffinity"] = self.conaffinity
         return d
 
     @classmethod
@@ -129,6 +138,8 @@ class Geometry:
             mesh_scale=d.get("mesh_scale"),
             origin=d.get("origin"),
             color=d.get("color"),
+            contype=d.get("contype"),
+            conaffinity=d.get("conaffinity"),
         )
 
 

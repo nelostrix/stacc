@@ -1028,6 +1028,39 @@ def cmd_doctor(args):
 # ──────────────────────────────────────────────
 # COMMAND: run
 # ──────────────────────────────────────────────
+def cmd_serve(args):
+    """Run the live UI/telemetry server (stdlib REST or FastAPI+WebSocket)."""
+    label = "FastAPI + WebSocket" if args.fastapi else "stdlib REST"
+    print(f"\n  {Color.GEAR} Starting live server ({label})")
+    print(f"  {Color.DIM}Robot: {args.robot} | Physics: {args.physics} | "
+          f"Loop: {args.hz:g} Hz | Port: {args.port}{Color.RESET}\n")
+
+    if args.fastapi and not _fastapi_available():
+        log_error("fastapi/uvicorn not installed. Add the 'server' extra: pip install 'stacc[server]'")
+        sys.exit(1)
+
+    from stacc.server import serve as serve_bridge
+    serve_bridge(
+        robot=args.robot,
+        physics=args.physics,
+        host=args.host,
+        port=args.port,
+        hz=args.hz,
+        timestep=args.timestep,
+        fastapi=args.fastapi,
+    )
+
+
+def _fastapi_available() -> bool:
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 def cmd_run(args):
     """Run a robot script."""
     script = args.script or "src/robot.py"
@@ -1149,6 +1182,18 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
     p_reg_sub.add_parser("list", help="List all packages")
     p_pub = p_reg_sub.add_parser("publish", help="Publish a package")
     p_pub.add_argument("path", help="Path to package")
+
+    # serve
+    p_serve = subparsers.add_parser("serve", help="Run the live UI/telemetry server")
+    p_serve.add_argument("--host", default="0.0.0.0", help="Bind address")
+    p_serve.add_argument("--port", "-p", type=int, default=8002, help="Port")
+    p_serve.add_argument("--robot", "-r", default="arm", help="Robot type")
+    p_serve.add_argument("--physics", default="mujoco",
+                         choices=["mujoco", "internal"], help="Physics backend")
+    p_serve.add_argument("--hz", type=float, default=60.0, help="Telemetry loop rate (Hz)")
+    p_serve.add_argument("--timestep", type=float, default=0.001, help="Physics timestep (s)")
+    p_serve.add_argument("--fastapi", action="store_true",
+                         help="Use FastAPI + WebSocket instead of the stdlib bridge")
     
     args = parser.parse_args()
     
@@ -1168,6 +1213,7 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
         "doctor": cmd_doctor,
         "run": cmd_run,
         "registry": cmd_registry,
+        "serve": cmd_serve,
     }
     
     if args.command in commands:
