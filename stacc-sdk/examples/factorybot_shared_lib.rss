@@ -1,0 +1,23 @@
+// Same idea as factorybot.rss, but pulling "industrial-arm" from a
+// *separate* shared component file instead of defining it locally — this
+// is the actual "stylesheet you import from elsewhere" behavior:
+//   stacc rss check examples/factorybot_shared_lib.rss
+robot "FactoryBotShared" {
+    use "lib_industrial_arm.rss:industrial-arm";
+
+    body {
+        shape: box;
+        material: aluminum;
+        color: "#111111";
+    }
+
+    arm left {
+        actuator: servo;
+        reach: 650mm;
+    }
+
+    gripper {
+        type: parallel;
+        fingers: 2;
+    }
+}

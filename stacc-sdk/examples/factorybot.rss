@@ -1,0 +1,30 @@
+// Example RSS robot description — component reuse via `use`.
+component "industrial-arm" {
+    joints: 6;
+    payload: 10kg;
+
+    appearance {
+        body { color: "#181818"; }
+        accent { color: "#FF5500"; }
+    }
+}
+
+robot "FactoryBot" {
+    use industrial-arm;
+
+    body {
+        shape: box;
+        material: aluminum;
+        color: "#111111";
+    }
+
+    arm left {
+        actuator: servo;
+        reach: 650mm;
+    }
+
+    gripper {
+        type: parallel;
+        fingers: 2;
+    }
+}

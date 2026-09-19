@@ -1,0 +1,49 @@
+// Example RSS robot description — a 4-legged walker, 3 joints per leg
+// (hip/thigh/knee), mirroring stacc's own `quadruped` CLI template.
+robot quadruped {
+    body {
+        shape: box;
+        material: carbon_fiber;
+        dimensions: [500mm, 250mm, 120mm];
+        color: "#22252b";
+    }
+
+    leg front_left {
+        joints: 3;
+        reach: 350mm;
+        actuator: brushless;
+    }
+
+    leg front_right {
+        joints: 3;
+        reach: 350mm;
+        actuator: brushless;
+    }
+
+    leg rear_left {
+        joints: 3;
+        reach: 350mm;
+        actuator: brushless;
+    }
+
+    leg rear_right {
+        joints: 3;
+        reach: 350mm;
+        actuator: brushless;
+    }
+
+    sensors {
+        imu body {
+            model: bmi088;
+        }
+
+        camera front {
+            model: realsense-d455;
+        }
+    }
+
+    navigation {
+        algorithm: mpc;
+        max_speed: 2.0m/s;
+    }
+}

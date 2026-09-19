@@ -89,9 +89,76 @@ def _cbf_check(ee: Dict[str, float]) -> tuple:
     return margin_mm, margin_mm >= CBF_BARRIER_MARGIN_MM
 
 
+def _real_energy_and_jitter(runtime: Any) -> Dict[str, float]:
+    """Real MuJoCo system energy (kinetic + potential) and the wall-clock
+    time this one physics step actually took — not a sine-wave approximation
+    or a hardcoded constant.
+    """
+    t0 = time.perf_counter()
+    backend = getattr(runtime.engine, "_physics_backend", None)
+    energy_j = 0.0
+    if backend is not None and hasattr(backend, "model") and hasattr(backend, "data"):
+        try:
+            import mujoco
+            mujoco.mj_energyPos(backend.model, backend.data)
+            mujoco.mj_energyVel(backend.model, backend.data)
+            energy_j = float(backend.data.energy[0] + backend.data.energy[1])
+        except Exception:
+            energy_j = 0.0
+    step_time_ms = (time.perf_counter() - t0) * 1000.0
+    return {"energy_j": round(energy_j, 3), "step_time_ms": round(step_time_ms, 4)}
+
+
+def _joint_world_offset(robot: Any, joint: Any, links_by_name: Dict[str, Any]) -> List[float]:
+    """The [x, y, z] a joint's child link actually sits at.
+
+    Joint.origin is [0,0,0,0,0,0] for chain-generated limbs — the real layout
+    is computed at MJCF-export time in stacc.sim.mjcf_builder, from an
+    explicit Connection offset if one was set, else auto-derived from parent/
+    child geometry. Reuse that exact logic instead of re-deriving it, so the
+    NELO-Studio viewport renders robots at the same positions MuJoCo does.
+    """
+    from stacc.sim.mjcf_builder import _compute_auto_offset
+
+    explicit = robot.get_connection_offset(joint.parent_link, joint.child_link)
+    if explicit is not None:
+        return [float(v) for v in explicit]
+
+    parent = links_by_name.get(joint.parent_link)
+    child = links_by_name.get(joint.child_link)
+    if parent is None or child is None:
+        return [0.0, 0.0, 0.0]
+    return [float(v) for v in _compute_auto_offset(parent, child, joint).split()]
+
+
+def serialize_robot(robot: Any) -> Dict[str, Any]:
+    """The compiled-robot contract the NELO-Studio 3D view renders generically
+    (any RSS-designed robot, not just the built-in arm) — Link/Joint already
+    know how to describe themselves, so this is mostly just assembling their
+    output, plus the real chain-layout offsets (see _joint_world_offset).
+    """
+    links_by_name = {l.name: l for l in robot.links}
+
+    joints_json = []
+    for j in robot.joints:
+        d = j.to_dict()
+        x, y, z = _joint_world_offset(robot, j, links_by_name)
+        d["origin"] = [x, y, z, d["origin"][3], d["origin"][4], d["origin"][5]]
+        joints_json.append(d)
+
+    return {
+        "name": robot.name,
+        "dof": robot.dof,
+        "links": [l.to_dict() for l in robot.links],
+        "joints": joints_json,
+        "warnings": list(getattr(robot, "rss_warnings", []) or []),
+    }
+
+
 def live_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
-    """Command joint angles (degrees) to the live MuJoCo arm and report real state."""
-    joints_deg = req.get("joints", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    """Command joint angles (degrees) to the live MuJoCo robot and report real state."""
+    dof = RT.robot.dof if (RT is not None and RT.robot is not None) else 6
+    joints_deg = req.get("joints", [0.0] * dof)
     kp = float(req.get("kpGain", 120))
     kd = float(req.get("kdGain", 25))
 
@@ -101,6 +168,7 @@ def live_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
     ee = _ee_xyz(RT)
     margin_mm, cbf_safe = _cbf_check(ee)
     torques = [round(float(t), 2) for t in RT.robot._state["joint_torques"]]
+    physics = _real_energy_and_jitter(RT)
 
     return {
         "step": RT.engine.state.step,
@@ -111,6 +179,8 @@ def live_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
         "cbf_margin_mm": margin_mm,
         "cbf_safe": cbf_safe,
         "shm_status": "LOCKED_RT_SYNC",
+        "energy_j": physics["energy_j"],
+        "step_time_ms": physics["step_time_ms"],
     }
 
 
@@ -175,6 +245,46 @@ def live_tune_gains(req: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# RSS — load a user-designed robot into the live daemon (NELO-Studio Robot
+# Designer). Requires the real SDK; there is no meaningful analytic fallback
+# for "compile arbitrary robot geometry", so these 404 honestly when RT is None
+# instead of pretending to compile anything.
+# ─────────────────────────────────────────────────────────────────────────────
+
+EXAMPLES_DIR = os.path.join(SDK_PATH, "examples")
+
+
+def rss_load(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse + compile an .rss document and hot-swap it into the live runtime."""
+    from stacc.rss import RSSCompileError, RSSSyntaxError, compile_document, parse
+
+    source = req.get("source", "")
+    try:
+        doc = parse(source)
+        robot = compile_document(doc, search_paths=[EXAMPLES_DIR])
+    except RSSSyntaxError as e:
+        return {"error": e.message, "line": e.line, "col": e.col, "kind": "syntax"}
+    except RSSCompileError as e:
+        return {"error": str(e), "kind": "compile"}
+
+    RT.set_robot(robot)
+    RT.set_joint_positions([0.0] * robot.dof)
+    RT.start()
+    return {"robot": serialize_robot(robot)}
+
+
+def rss_examples() -> Dict[str, Any]:
+    """Real .rss example files shipped with the SDK, for the editor's picker."""
+    examples = []
+    if os.path.isdir(EXAMPLES_DIR):
+        for fname in sorted(os.listdir(EXAMPLES_DIR)):
+            if fname.endswith(".rss"):
+                with open(os.path.join(EXAMPLES_DIR, fname), "r") as f:
+                    examples.append({"name": fname, "source": f.read()})
+    return {"examples": examples}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Analytic fallback (same response shapes, no SDK)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -215,6 +325,7 @@ def compute_rnea_gravity_torques(q_deg: List[float]) -> List[float]:
 
 def fallback_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
     global SIMULATION_STEPS
+    t0 = time.perf_counter()
     SIMULATION_STEPS += 1
     joints = req.get("joints", [0, 0, 0, 0, 0, 0])
     ee = compute_forward_kinematics(joints)
@@ -228,6 +339,10 @@ def fallback_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
         "cbf_margin_mm": margin_mm,
         "cbf_safe": cbf_safe,
         "shm_status": "LOCKED_RT_SYNC",
+        # No physics engine in this analytic fallback to derive real energy
+        # from — 0.0 is the honest "not available" value here, not a guess.
+        "energy_j": 0.0,
+        "step_time_ms": round((time.perf_counter() - t0) * 1000.0, 4),
     }
 
 
@@ -314,6 +429,16 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
                     {"id": "line_follower", "name": "2-Wheel Differential Mobile Base", "dof": 2, "solver": "STACC 2D"},
                 ]
             })
+        elif self.path == "/v1/robot/structure":
+            if RT is not None and RT.robot is not None:
+                self._send_json(200, serialize_robot(RT.robot))
+            else:
+                self._send_json(503, {"error": "Live SDK runtime unavailable — no robot loaded"})
+        elif self.path == "/v1/rss/examples":
+            if STACC_SDK_AVAILABLE:
+                self._send_json(200, rss_examples())
+            else:
+                self._send_json(503, {"error": "Live SDK runtime unavailable — cannot read RSS examples"})
         else:
             self._send_json(404, {"error": "Endpoint not found"})
 
@@ -333,6 +458,13 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
         elif self.path == "/v1/robot/tune_gains":
             result = live_tune_gains(req_data) if RT else fallback_tune_gains(req_data)
             self._send_json(200, result)
+
+        elif self.path == "/v1/rss/load":
+            if RT is None:
+                self._send_json(503, {"error": "Live SDK runtime unavailable — cannot compile RSS"})
+                return
+            result = rss_load(req_data)
+            self._send_json(400 if "error" in result else 200, result)
 
         else:
             self._send_json(404, {"error": "Endpoint not found"})

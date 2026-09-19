@@ -917,40 +917,60 @@ def cmd_build(args):
     
     target = args.target or "x86_64"
     target_name = TARGET_MAP.get(target, target)
-    
+
     print(f"\n  {Color.GEAR} Building for: {Color.BOLD}{target_name}{Color.RESET}\n")
-    
-    steps = 6
-    log_step(1, steps, "Analyzing dependencies...")
-    time.sleep(0.2)
-    log_step(2, steps, "Generating hardware abstraction layer...")
-    time.sleep(0.3)
-    log_step(3, steps, "Compiling C++ core...")
-    time.sleep(0.4)
-    log_step(4, steps, "Binding Python modules...")
-    time.sleep(0.2)
-    log_step(5, steps, f"Cross-compiling for {target}...")
-    time.sleep(0.5)
-    log_step(6, steps, "Packaging binary...")
-    time.sleep(0.2)
-    
+
+    MCU_TARGETS = {"arduino", "esp32", "stm32"}
+    if target in MCU_TARGETS:
+        # stacc is a Python robotics SDK — it has no C/C++ toolchain and
+        # doesn't generate microcontroller firmware source. Pretending to
+        # cross-compile one here would just be printing fake progress bars,
+        # which is exactly what this command used to do. Say so plainly.
+        log_warn(f"stacc doesn't generate {target} firmware — there's no C/C++ "
+                 f"codegen for microcontrollers here.")
+        print(f"  {Color.DIM}If you already have a compiled firmware image (.hex/.bin), "
+              f"flash it directly with:{Color.RESET}")
+        print(f"  {Color.CYAN}from stacc.hal.boards import FirmwareUploader{Color.RESET}")
+        print(f"  {Color.CYAN}FirmwareUploader(board=\"{target}\", port=\"/dev/ttyUSB0\")"
+              f".upload(\"firmware.bin\"){Color.RESET}\n")
+        return
+
+    # Python-capable targets (rpi/jetson/x86_64): the honest "build" is
+    # packaging the real project tree into something stacc.hal.deploy.Deployer
+    # can upload and run with `python3` on the target — there's no compiled
+    # binary because stacc is Python, not C++.
     build_dir = Path.cwd() / "build" / target
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Write build info
+
+    skip_dirs = {"build", ".stacc", "data", ".git", "__pycache__", ".venv", "venv"}
+    steps_total = 2
+    log_step(1, steps_total, "Packaging project files...")
+    for item in Path.cwd().iterdir():
+        if item.name in skip_dirs:
+            continue
+        dest = build_dir / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        else:
+            shutil.copy2(item, dest)
+
+    log_step(2, steps_total, "Writing build manifest...")
     build_info = {
         "target": target,
         "target_name": target_name,
         "built_at": datetime.now().isoformat(),
         "project": manifest["name"],
         "version": manifest["version"],
-        "dependencies": manifest.get("dependencies", {})
+        "dependencies": manifest.get("dependencies", {}),
     }
     with open(build_dir / "build_info.json", "w") as f:
         json.dump(build_info, f, indent=2)
-    
+
     print(f"\n\n  {Color.GREEN}{Color.CHECK} Build complete!{Color.RESET}")
-    print(f"  {Color.DIM}Output: build/{target}/{Color.RESET}")
+    print(f"  {Color.DIM}Packaged project -> build/{target}/ "
+          f"({sum(1 for _ in build_dir.rglob('*') if _.is_file())} files){Color.RESET}")
     print(f"\n  Deploy with: {Color.CYAN}stacc deploy <robot_ip>{Color.RESET}\n")
 
 
@@ -958,34 +978,51 @@ def cmd_build(args):
 # COMMAND: deploy
 # ──────────────────────────────────────────────
 def cmd_deploy(args):
-    """Deploy built project to a robot."""
+    """Deploy a built project to a robot over real SSH/SFTP (stacc.hal.deploy.Deployer)."""
     target_ip = args.target_ip
-    user = args.user or "stacc"
-    
+    user = args.user or "pi"
+
     manifest_path = Path.cwd() / MANIFEST_NAME
     if not manifest_path.exists():
         log_error("Not in a stacc project.")
         sys.exit(1)
-    
+
     with open(manifest_path) as f:
         manifest = json.load(f)
-    
-    print(f"\n  {Color.ROCKET} Deploying {Color.BOLD}{manifest['name']}{Color.RESET} to {Color.CYAN}{user}@{target_ip}{Color.RESET}\n")
-    
-    steps = 5
-    log_step(1, steps, "Checking build artifacts...")
-    time.sleep(0.2)
-    log_step(2, steps, f"Connecting to {target_ip}...")
-    time.sleep(0.4)
-    log_step(3, steps, "Uploading binary package...")
-    time.sleep(0.6)
-    log_step(4, steps, "Installing on target...")
-    time.sleep(0.4)
-    log_step(5, steps, "Verifying deployment...")
-    time.sleep(0.3)
-    
-    print(f"\n\n  {Color.GREEN}{Color.CHECK} Deployed successfully!{Color.RESET}")
-    print(f"\n  Start on robot: {Color.CYAN}ssh {user}@{target_ip} 'stacc run'{Color.RESET}\n")
+
+    target = getattr(args, "target", None) or "x86_64"
+    local_dir = Path.cwd() / "build" / target
+    if not local_dir.exists():
+        log_error(f"No build output at build/{target}/ — run 'stacc build --target={target}' first.")
+        sys.exit(1)
+
+    print(f"\n  {Color.ROCKET} Deploying {Color.BOLD}{manifest['name']}{Color.RESET} to "
+          f"{Color.CYAN}{user}@{target_ip}{Color.RESET}\n")
+
+    from stacc.hal.deploy import Deployer
+
+    deployer = Deployer(target_ip, user=user, key_file=getattr(args, "key", None))
+
+    log_info(f"Connecting to {target_ip}...")
+    if not deployer.connect():
+        log_error(f"Could not connect to {user}@{target_ip} — check the IP, that SSH is "
+                   f"running on the target, and your key/credentials. Nothing was deployed.")
+        sys.exit(1)
+    log_success("Connected.")
+
+    remote_path = f"/home/{user}/stacc_robot/"
+    log_info(f"Uploading build/{target}/ -> {remote_path} ...")
+    deployer.upload(str(local_dir), remote_path)
+
+    if not args.no_install:
+        log_info("Installing/updating stacc on the target...")
+        deployer.install_stacc()
+
+    deployer.close()
+
+    print(f"\n  {Color.GREEN}{Color.CHECK} Deployed.{Color.RESET}")
+    print(f"\n  Start on robot: {Color.CYAN}ssh {user}@{target_ip} "
+          f"'cd {remote_path} && python3 src/robot.py'{Color.RESET}\n")
 
 
 # ──────────────────────────────────────────────
@@ -1110,6 +1147,290 @@ def cmd_registry(args):
 
 
 # ──────────────────────────────────────────────
+# COMMAND: rss (parse / compile RSS robot descriptions)
+# ──────────────────────────────────────────────
+def _rss_load_document(file_path):
+    from stacc.rss import RSSSyntaxError, parse
+
+    path = Path(file_path)
+    if not path.exists():
+        log_error(f"RSS file not found: {file_path}")
+        sys.exit(1)
+    try:
+        return parse(path.read_text())
+    except RSSSyntaxError as e:
+        log_error("RSS syntax error")
+        print(f"  {Color.DIM}{e}{Color.RESET}")
+        sys.exit(1)
+
+
+def _rss_search_paths(args):
+    """Directories cross-file `use "lib.rss:name";` looks in: the .rss
+    file's own directory, plus any --rss-path directories given on the CLI.
+    """
+    paths = [Path(args.file).resolve().parent]
+    for extra in getattr(args, "rss_path", None) or []:
+        paths.append(Path(extra))
+    return paths
+
+
+def _rss_compile(doc, args):
+    from stacc.rss import RSSCompileError, compile_document
+
+    try:
+        return compile_document(doc, robot_name=args.robot, search_paths=_rss_search_paths(args))
+    except RSSCompileError as e:
+        log_error(f"RSS compile error: {e}")
+        sys.exit(1)
+
+
+def cmd_rss_check(args):
+    """Parse and compile an .rss file without writing any output."""
+    doc = _rss_load_document(args.file)
+    robot = _rss_compile(doc, args)
+
+    print(f"\n  {Color.ROBOT} {Color.BOLD}{robot.name}{Color.RESET} — RSS check passed")
+    print(f"  {Color.DIM}Links: {robot.num_links}  Joints: {robot.num_joints}  "
+          f"DOF: {robot.dof}  Sensors: {len(robot.sensors)}{Color.RESET}")
+    for link in robot.links:
+        print(f"    {Color.CYAN}{link.name:20s}{Color.RESET} mass={link.mass}kg")
+    for sensor in robot.sensors:
+        print(f"    {Color.MAGENTA}sensor:{sensor.kind:12s}{Color.RESET} "
+              f"@ {getattr(sensor, '_mount_position', '?')}")
+    for w in getattr(robot, "rss_warnings", []):
+        log_warn(w)
+    print()
+
+
+def cmd_rss_build(args):
+    """Compile an .rss file to URDF/SDF/MJCF, and (by default) a ROS 2 package skeleton."""
+    from stacc.converters.urdf_mjcf_usd import ModelTranspiler
+
+    doc = _rss_load_document(args.file)
+    robot = _rss_compile(doc, args)
+
+    build_dir = Path(args.out or "build")
+    fmt = args.format  # None (default bundle), or one of "urdf"/"sdf"/"mjcf"/"all"
+    written = []
+
+    def write_urdf():
+        out_dir = build_dir / "urdf"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{robot.name}.urdf"
+        xml = ModelTranspiler.robot_to_urdf(robot)
+        path.write_text(xml)
+        written.append(path)
+        return xml
+
+    def write_sdf():
+        out_dir = build_dir / "gazebo"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{robot.name}.sdf"
+        path.write_text(ModelTranspiler.robot_to_sdf(robot))
+        written.append(path)
+
+    def write_mjcf():
+        from stacc.sim.engine import SimulationConfig
+        from stacc.sim.mjcf_builder import robot_to_mjcf
+
+        out_dir = build_dir / "mjcf"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{robot.name}.xml"
+        path.write_text(robot_to_mjcf(robot, SimulationConfig()))
+        written.append(path)
+
+    def write_ros2(urdf_xml):
+        from stacc.rss import write_ros2_package
+
+        out_dir = build_dir / "ros2"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        pkg_dir = write_ros2_package(robot, urdf_xml, out_dir)
+        written.append(pkg_dir / "package.xml")
+
+    def write_stl():
+        from stacc.rss.mesh_export import write_stl_parts
+
+        out_dir = build_dir / "parts"
+        for p in write_stl_parts(robot, str(out_dir)):
+            written.append(Path(p))
+        for w in getattr(robot, "rss_mesh_warnings", []):
+            log_warn(w)
+
+    def write_bom_files():
+        from stacc.rss.bom import write_bom
+
+        paths = write_bom(robot, str(build_dir))
+        written.append(Path(paths["csv"]))
+        written.append(Path(paths["md"]))
+
+    if fmt is None:
+        # Default bundle: everything a real robotics project needs to get
+        # moving — plain URDF, an SDF copy for Gazebo, and a ROS 2
+        # description package pre-filled with that URDF.
+        urdf_xml = write_urdf()
+        write_sdf()
+        write_ros2(urdf_xml)
+    elif fmt == "urdf":
+        write_urdf()
+    elif fmt == "sdf":
+        write_sdf()
+    elif fmt == "mjcf":
+        write_mjcf()
+    elif fmt == "stl":
+        write_stl()
+    elif fmt == "bom":
+        write_bom_files()
+    elif fmt == "all":
+        urdf_xml = write_urdf()
+        write_sdf()
+        write_mjcf()
+        write_ros2(urdf_xml)
+        write_stl()
+        write_bom_files()
+
+    for w in getattr(robot, "rss_warnings", []):
+        log_warn(w)
+    log_success(f"Compiled {args.file} -> " + ", ".join(str(p) for p in written))
+    print(f"  {Color.DIM}Links: {robot.num_links}  Joints: {robot.num_joints}  "
+          f"DOF: {robot.dof}{Color.RESET}\n")
+
+
+def cmd_rss_run(args):
+    """Compile an .rss file and run it in the stacc simulator."""
+    import stacc
+
+    doc = _rss_load_document(args.file)
+    robot = _rss_compile(doc, args)
+
+    render = bool(args.render)
+    print(f"\n  {Color.GEAR} Running {Color.BOLD}{robot.name}{Color.RESET} "
+          f"({robot.num_links} links, {robot.num_joints} joints)")
+    print(f"  {Color.DIM}Duration: {args.duration}s | Render: {render}{Color.RESET}\n")
+
+    stacc.simulate(robot, duration=args.duration, render=render, headless=not render)
+
+
+def _generate_control_script(robot) -> str:
+    """A control-script TEMPLATE, not a finished controller: physical wiring
+    (which GPIO pin each motor is actually on) is something only the person
+    building the robot knows, so every pin is a marked TODO rather than a
+    guess.
+    """
+    metadata = getattr(robot, "rss_metadata", {})
+    actuated = [j for j in robot.joints if j.type != "fixed"]
+
+    lines = [
+        f'"""Control script for {robot.name} — generated by `stacc rss deploy`.',
+        "",
+        "This is a TEMPLATE, not a finished controller. Fill in the pin_a/pin_b/",
+        "pin_enable TODOs below to match your actual wiring before running this",
+        "on the robot — nothing here can know your physical wiring for you.",
+        '"""',
+        "",
+        "from stacc.hal.gpio import GPIO",
+        "from stacc.hal.motor import MotorDriver",
+        "",
+        "gpio = GPIO()",
+        "",
+    ]
+
+    for joint in actuated:
+        meta = metadata.get(joint.child_link, {})
+        actuator = meta.get("actuator") or meta.get("motor") or "unspecified in .rss"
+        var_name = joint.name.replace("-", "_")
+        lines += [
+            f'# Joint "{joint.name}" ({joint.type}) — actuator/motor from .rss: {actuator!r}',
+            f"{var_name} = MotorDriver(",
+            f"    pin_a=None,  # TODO: your wiring",
+            f"    pin_b=None,  # TODO: your wiring",
+            f"    pin_enable=None,  # TODO: optional PWM enable pin",
+            f"    gpio=gpio,",
+            f")",
+            "",
+        ]
+
+    lines += ["", "def main():"]
+    if actuated:
+        lines.append('    print("Fill in real GPIO pins above before running this on hardware.")')
+        lines.append("    # TODO: your control loop, e.g.:")
+        for joint in actuated:
+            var_name = joint.name.replace("-", "_")
+            lines.append(f"    # {var_name}.set_speed(0.5)")
+    else:
+        lines.append("    pass  # no actuated joints in this robot")
+    lines += ["", "", 'if __name__ == "__main__":', "    main()", ""]
+    return "\n".join(lines)
+
+
+def cmd_rss_deploy(args):
+    """Compile an .rss file, package it, and deploy it to real hardware over SSH."""
+    from stacc.converters.urdf_mjcf_usd import ModelTranspiler
+
+    doc = _rss_load_document(args.file)
+    robot = _rss_compile(doc, args)
+
+    build_dir = Path(args.out or "build") / "deploy" / robot.name
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+    (build_dir / "src").mkdir(parents=True, exist_ok=True)
+
+    urdf_xml = ModelTranspiler.robot_to_urdf(robot)
+    (build_dir / "src" / f"{robot.name}.urdf").write_text(urdf_xml)
+    (build_dir / "src" / "robot.py").write_text(_generate_control_script(robot))
+
+    for w in getattr(robot, "rss_warnings", []):
+        log_warn(w)
+    log_success(f"Packaged {robot.name} -> {build_dir}")
+    print(f"  {Color.DIM}{robot.num_links} links, {robot.num_joints} joints "
+          f"({robot.dof} actuated) — see src/robot.py for the wiring TODOs{Color.RESET}\n")
+
+    if args.no_deploy:
+        print(f"  {Color.DIM}--no-deploy set: stopping after packaging, nothing sent "
+              f"over the network.{Color.RESET}\n")
+        return
+
+    from stacc.hal.deploy import Deployer
+
+    user = args.user or "pi"
+    print(f"  {Color.ROCKET} Deploying to {Color.CYAN}{user}@{args.target_ip}{Color.RESET}\n")
+
+    deployer = Deployer(args.target_ip, user=user, key_file=args.key)
+    log_info(f"Connecting to {args.target_ip}...")
+    if not deployer.connect():
+        log_error(f"Could not connect to {user}@{args.target_ip} — check the IP, that SSH "
+                  f"is running on the target, and your key/credentials. Nothing was deployed.")
+        sys.exit(1)
+    log_success("Connected.")
+
+    remote_path = f"/home/{user}/{robot.name}/"
+    log_info(f"Uploading {build_dir} -> {remote_path} ...")
+    deployer.upload(str(build_dir), remote_path)
+
+    if not args.no_install:
+        log_info("Installing/updating stacc on the target...")
+        deployer.install_stacc()
+
+    deployer.close()
+    print(f"\n  {Color.GREEN}{Color.CHECK} Deployed.{Color.RESET}")
+    print(f"  Start on robot: {Color.CYAN}ssh {user}@{args.target_ip} "
+          f"'cd {remote_path}src && python3 robot.py'{Color.RESET}\n")
+
+
+def cmd_rss(args):
+    """Dispatch `stacc rss <check|build|run|deploy>`."""
+    actions = {
+        "check": cmd_rss_check,
+        "build": cmd_rss_build,
+        "run": cmd_rss_run,
+        "deploy": cmd_rss_deploy,
+    }
+    if args.rss_action not in actions:
+        log_error("Usage: stacc rss <check|build|run|deploy> <file.rss>")
+        sys.exit(1)
+    actions[args.rss_action](args)
+
+
+# ──────────────────────────────────────────────
 # MAIN ARGUMENT PARSER
 # ──────────────────────────────────────────────
 def main():
@@ -1167,7 +1488,12 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
     # deploy
     p_deploy = subparsers.add_parser("deploy", help="Deploy to robot")
     p_deploy.add_argument("target_ip", help="Robot IP address")
-    p_deploy.add_argument("--user", "-u", help="SSH username", default="stacc")
+    p_deploy.add_argument("--user", "-u", help="SSH username", default="pi")
+    p_deploy.add_argument("--target", "-t", help="Build target to deploy (default: x86_64)",
+                          choices=["rpi", "raspberry_pi", "jetson", "x86", "x86_64"])
+    p_deploy.add_argument("--key", help="Path to SSH private key file")
+    p_deploy.add_argument("--no-install", action="store_true",
+                          help="Skip running install_stacc() on the target after upload")
     
     # doctor
     subparsers.add_parser("doctor", help="Check system health")
@@ -1182,6 +1508,57 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
     p_reg_sub.add_parser("list", help="List all packages")
     p_pub = p_reg_sub.add_parser("publish", help="Publish a package")
     p_pub.add_argument("path", help="Path to package")
+
+    # rss
+    p_rss = subparsers.add_parser("rss", help="Work with .rss declarative robot descriptions")
+    p_rss_sub = p_rss.add_subparsers(dest="rss_action")
+
+    rss_path_help = (
+        "Extra directory to search for cross-file use \"lib.rss:name\"; refs "
+        "(repeatable). The .rss file's own directory is always searched."
+    )
+
+    p_rss_check = p_rss_sub.add_parser("check", help="Parse + compile an .rss file, report only")
+    p_rss_check.add_argument("file", help="Path to the .rss file")
+    p_rss_check.add_argument("--robot", help="Robot name to compile (if the file defines several)")
+    p_rss_check.add_argument("--rss-path", action="append", help=rss_path_help)
+
+    p_rss_build = p_rss_sub.add_parser("build", help="Compile an .rss file to URDF")
+    p_rss_build.add_argument("file", help="Path to the .rss file")
+    p_rss_build.add_argument("--robot", help="Robot name to compile (if the file defines several)")
+    p_rss_build.add_argument("--out", help="Output directory (default: build/)")
+    p_rss_build.add_argument("--rss-path", action="append", help=rss_path_help)
+    p_rss_build.add_argument(
+        "--format", choices=["urdf", "sdf", "mjcf", "stl", "bom", "all"], default=None,
+        help="Single format to emit. Default emits the full bundle: "
+             "build/urdf/, build/gazebo/ (SDF), build/ros2/<name>_description/. "
+             "'stl' writes build/parts/*.stl for 3D printing; 'bom' writes "
+             "build/bom.csv + build/bom.md; 'all' emits everything.",
+    )
+
+    p_rss_run = p_rss_sub.add_parser("run", help="Compile an .rss file and simulate it")
+    p_rss_run.add_argument("file", help="Path to the .rss file")
+    p_rss_run.add_argument("--robot", help="Robot name to compile (if the file defines several)")
+    p_rss_run.add_argument("--rss-path", action="append", help=rss_path_help)
+    p_rss_run.add_argument("--sim", action="store_true", help="Run in the physics simulator")
+    p_rss_run.add_argument("--duration", "-d", type=float, default=10.0, help="Duration in seconds")
+    p_rss_run.add_argument("--render", action="store_true",
+                           help="Open the MuJoCo viewer (needs a working display/GPU)")
+
+    p_rss_deploy = p_rss_sub.add_parser(
+        "deploy", help="Compile an .rss file, package it, and deploy it to real hardware over SSH"
+    )
+    p_rss_deploy.add_argument("file", help="Path to the .rss file")
+    p_rss_deploy.add_argument("target_ip", help="Target device IP address")
+    p_rss_deploy.add_argument("--robot", help="Robot name to compile (if the file defines several)")
+    p_rss_deploy.add_argument("--rss-path", action="append", help=rss_path_help)
+    p_rss_deploy.add_argument("--out", help="Local build directory (default: build/)")
+    p_rss_deploy.add_argument("--user", "-u", default="pi", help="SSH username (default: pi)")
+    p_rss_deploy.add_argument("--key", help="Path to SSH private key file")
+    p_rss_deploy.add_argument("--no-install", action="store_true",
+                              help="Skip running install_stacc() on the target after upload")
+    p_rss_deploy.add_argument("--no-deploy", action="store_true",
+                              help="Only package locally (src/robot.py + URDF) — don't connect over SSH")
 
     # serve
     p_serve = subparsers.add_parser("serve", help="Run the live UI/telemetry server")
@@ -1213,6 +1590,7 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
         "doctor": cmd_doctor,
         "run": cmd_run,
         "registry": cmd_registry,
+        "rss": cmd_rss,
         "serve": cmd_serve,
     }
     

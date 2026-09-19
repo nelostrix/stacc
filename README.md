@@ -181,9 +181,14 @@ Features:
 
 ```bash
 stacc search navigation        # Search packages
-stacc install slam-toolkit      # Install with dependency resolution
+stacc install slam-toolkit      # Add a package to your project manifest
 stacc registry list             # List all available packages
 ```
+
+> **Status**: `stacc install`/`registry` currently resolve against a built-in local
+> package list (below) and record the choice in your project manifest — there's no
+> hosted registry, dependency resolution, or real download yet. Publishing your own
+> package (`stacc registry publish`) isn't available in this version.
 
 ### Available packages
 
@@ -230,13 +235,15 @@ pytest
 
 - [x] CLI framework with all commands
 - [x] GUI platform prototype
-- [ ] Core robot model (joints, links, URDF)
-- [ ] Kinematics engine (FK, IK, dynamics)
-- [ ] MuJoCo simulation backend
-- [ ] Hardware abstraction layer
-- [ ] Sensor simulation
-- [ ] AI/perception toolkit
-- [ ] Package registry server
+- [x] Core robot model (joints, links, URDF)
+- [x] Kinematics engine (FK, IK, dynamics)
+- [x] MuJoCo simulation backend
+- [x] Hardware abstraction layer
+- [x] Sensor simulation
+- [x] AI/perception toolkit
+- [x] RSS — declarative robot description language (`stacc rss check|build|run`)
+- [ ] Package registry server (`stacc install`/`registry` currently resolve against a
+      built-in local package list — there's no hosted registry or real download yet)
 - [ ] Cloud simulation
 - [ ] Community marketplace
 

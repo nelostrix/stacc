@@ -13,7 +13,14 @@ setup(
     extras_require={
         "sim": ["mujoco>=3.0.0", "glfw>=2.6.0"],
         "server": ["fastapi>=0.110.0", "uvicorn>=0.29.0", "websockets>=12.0"],
-        "all": ["mujoco>=3.0.0", "glfw>=2.6.0", "fastapi>=0.110.0", "uvicorn>=0.29.0", "websockets>=12.0"],
+        "deploy": ["paramiko>=3.0.0"],
+        "manufacturing": ["trimesh>=4.0.0"],
+        "all": [
+            "mujoco>=3.0.0", "glfw>=2.6.0",
+            "fastapi>=0.110.0", "uvicorn>=0.29.0", "websockets>=12.0",
+            "paramiko>=3.0.0",
+            "trimesh>=4.0.0",
+        ],
     },
     entry_points={
         "console_scripts": [

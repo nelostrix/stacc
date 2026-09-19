@@ -1,0 +1,19 @@
+// Example RSS robot description — a fixed-base 6-DOF manipulator arm.
+robot arm_6dof {
+    body {
+        shape: box;
+        material: aluminum;
+        color: "#1e293b";
+    }
+
+    arm main {
+        joints: 6;
+        actuator: servo;
+        reach: 900mm;
+    }
+
+    gripper {
+        type: parallel;
+        fingers: 2;
+    }
+}

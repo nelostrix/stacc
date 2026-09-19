@@ -1,0 +1,38 @@
+// Example RSS robot description — a quadcopter drone, mirroring stacc's
+// own `drone` CLI template. Rotors are modeled as fixed (non-actuated)
+// `arm` stubs since RSS's limb vocabulary doesn't yet have a dedicated
+// "rotor" block type — a documented simplification, not a real spin joint.
+robot drone {
+    body {
+        shape: box;
+        material: carbon_fiber;
+        dimensions: [220mm, 220mm, 60mm];
+        color: "#101010";
+    }
+
+    arm rotor_fl { actuator: bldc; reach: 180mm; }
+    arm rotor_fr { actuator: bldc; reach: 180mm; }
+    arm rotor_rl { actuator: bldc; reach: 180mm; }
+    arm rotor_rr { actuator: bldc; reach: 180mm; }
+
+    sensors {
+        imu body {
+            model: bmi088;
+            rate: 400hz;
+        }
+
+        gps top {
+            model: ublox-m9n;
+        }
+
+        camera front {
+            model: runcam-nano;
+            fov: 150deg;
+        }
+    }
+
+    navigation {
+        algorithm: px4-ekf2;
+        max_speed: 15m/s;
+    }
+}

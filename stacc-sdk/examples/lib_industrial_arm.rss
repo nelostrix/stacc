@@ -1,0 +1,12 @@
+// A shared component library — no `robot` here, just reusable `component`
+// definitions other .rss files pull in via cross-file `use`:
+//   use "lib_industrial_arm.rss:industrial-arm";
+component "industrial-arm" {
+    joints: 6;
+    payload: 10kg;
+
+    appearance {
+        body { color: "#181818"; }
+        accent { color: "#FF5500"; }
+    }
+}

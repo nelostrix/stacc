@@ -1,0 +1,48 @@
+// Example RSS robot description — a wheeled warehouse robot with lidar + camera.
+robot warehouse_bot {
+
+    chassis {
+        shape: differential-drive;
+        dimensions: [600mm, 450mm, 250mm];
+    }
+
+    sensors {
+        lidar front {
+            model: rplidar-a2;
+            range: 12m;
+            fov: 360deg;
+        }
+
+        camera front {
+            model: realsense-d455;
+        }
+    }
+
+    actuators {
+        wheel left {
+            motor: "BLDC-01";
+            radius: 120mm;
+        }
+
+        wheel right {
+            motor: "BLDC-01";
+            radius: 120mm;
+        }
+    }
+
+    navigation {
+        algorithm: nav2;
+        max_speed: 1.5m/s;
+    }
+
+    appearance {
+        chassis {
+            color: "#111111";
+            finish: matte;
+        }
+
+        accent {
+            color: "#00FFAA";
+        }
+    }
+}

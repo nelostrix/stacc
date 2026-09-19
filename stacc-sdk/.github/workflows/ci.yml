@@ -42,10 +42,13 @@ jobs:
               run: python tests/test_all_sensors.py
 
             - name: Run AI tests
-              run: python tests/test_ai.py || true
+              run: python tests/test_ai.py
 
             - name: Run master tests
               run: python tests/test_master.py
+
+            - name: Run RSS tests
+              run: python tests/test_rss.py
 
     # ═══════════════════════════════════════
     # LINT — code quality
