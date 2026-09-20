@@ -18,8 +18,17 @@ import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict, List
 
-# Add STACC SDK to python path
-STACC_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Add STACC SDK to python path.
+#
+# When frozen by PyInstaller (see packaging/build-stacc-daemon.sh in the
+# NELO-Studio repo), __file__ resolves inside the temporary/onedir bundle
+# rather than the real source tree, and the bundle's own root is
+# sys._MEIPASS, not dirname(__file__) — data files added via --add-data
+# (examples/*.rss) land there, not next to a "stacc-sdk" sibling folder.
+if getattr(sys, "frozen", False):
+    STACC_ROOT = sys._MEIPASS  # type: ignore[attr-defined]
+else:
+    STACC_ROOT = os.path.dirname(os.path.abspath(__file__))
 SDK_PATH = os.path.join(STACC_ROOT, "stacc-sdk")
 if SDK_PATH not in sys.path:
     sys.path.insert(0, SDK_PATH)
@@ -473,15 +482,32 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
         pass  # keep the console quiet during high-rate polling
 
 
-def run_server(port: int = 8766):
-    server_address = ("127.0.0.1", port)
-    httpd = HTTPServer(server_address, STACCRequestHandler)
+def run_server(port: int = 8766, max_port_attempts: int = 10):
+    # A shipped desktop app can't assume its default port is free on every
+    # user's machine (another app, or a leftover daemon from a prior run,
+    # may already hold it) — try a few ports upward instead of crashing
+    # uncaught on OSError, and report whichever one actually bound so the
+    # Electron parent process can find it.
+    httpd = None
+    bound_port = port
+    for attempt in range(max_port_attempts):
+        bound_port = port + attempt
+        try:
+            httpd = HTTPServer(("127.0.0.1", bound_port), STACCRequestHandler)
+            break
+        except OSError:
+            if attempt == max_port_attempts - 1:
+                raise
+            continue
+    assert httpd is not None
+    port = bound_port
     label = (
         f"Live SDK runtime ({RT.robot.name}, {RT.engine._physics_backend.__class__.__name__})"
         if RT is not None else "analytic fallback kernel"
     )
     print(f"🚀 [STACC-SERVER] STACC Universal Robotics & MuJoCo Daemon listening on http://127.0.0.1:{port}")
     print(f"🤖 [STACC-SERVER] Platform: STACC v{STACC_VERSION} | 1000Hz RT-Kernel Active | {label}")
+    print(f"STACC_BOUND_PORT={port}", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
