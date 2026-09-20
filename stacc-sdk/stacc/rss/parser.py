@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import List
 
-from stacc.rss.ast_nodes import Block, ComponentDef, Document, NumberValue, RobotDef, Value
+from stacc.rss.ast_nodes import Block, ComponentDef, Document, NumberValue, RobotDef, Selector, Value, VarRef
 from stacc.rss.errors import RSSSyntaxError
 from stacc.rss.lexer import Token, tokenize
 
@@ -123,6 +123,37 @@ class Parser:
                 self._expect("SEMICOLON")
                 continue
 
+            # --name: value;  — a CSS-style custom property declaration.
+            if self._at("CUSTOM_PROP"):
+                name_tok = self._advance()
+                self._expect("COLON")
+                value = self._parse_value()
+                self._expect("SEMICOLON")
+                block.var_decls[str(name_tok.value)] = value
+                continue
+
+            # #id { ... }  — id-selector style rule.
+            if self._at("HASH"):
+                self._advance()
+                id_name = str(self._expect("IDENT").value)
+                self._expect("LBRACE")
+                child = self._parse_block_body(f"#{id_name}", None)
+                child.selector = Selector(id=id_name)
+                self._expect("RBRACE")
+                block.children.append(child)
+                continue
+
+            # .class { ... }  — class-selector style rule.
+            if self._at("DOT"):
+                self._advance()
+                class_name = str(self._expect("IDENT").value)
+                self._expect("LBRACE")
+                child = self._parse_block_body(f".{class_name}", None)
+                child.selector = Selector(classes=[class_name])
+                self._expect("RBRACE")
+                block.children.append(child)
+                continue
+
             if not self._at("IDENT"):
                 raise self._error(
                     f"expected a property or nested block, got {self._peek().kind} "
@@ -137,6 +168,23 @@ class Parser:
                 value = self._parse_value()
                 self._expect("SEMICOLON")
                 block.properties[key] = value
+                continue
+
+            # elem[attr="value"] { ... }  — attribute-selector style rule.
+            # `IDENT [` is otherwise never valid at block-item position (an
+            # array literal only ever appears after a ':'), so this is
+            # unambiguous with no lookahead beyond what we already have.
+            if self._at("LBRACKET"):
+                self._advance()
+                attr_name = str(self._expect("IDENT").value)
+                self._expect("EQUALS")
+                attr_value = str(self._expect("STRING").value)
+                self._expect("RBRACKET")
+                self._expect("LBRACE")
+                child = self._parse_block_body(f"{key}[{attr_name}]", None)
+                child.selector = Selector(element=key, attr=(attr_name, attr_value))
+                self._expect("RBRACE")
+                block.children.append(child)
                 continue
 
             if self._at("LBRACE"):
@@ -166,6 +214,12 @@ class Parser:
         if tok.kind == "STRING":
             self._advance()
             return str(tok.value)
+        if tok.kind == "IDENT" and tok.value == "var" and self._at("LPAREN", 1):
+            self._advance()  # 'var'
+            self._expect("LPAREN")
+            name_tok = self._expect("CUSTOM_PROP")
+            self._expect("RPAREN")
+            return VarRef(name=str(name_tok.value))
         if tok.kind == "IDENT":
             self._advance()
             return str(tok.value)

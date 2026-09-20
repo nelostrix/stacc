@@ -1,0 +1,51 @@
+// Example RSS robot description — the same quadruped shape as quadruped.rss,
+// but demonstrating the real CSS-like selector/variable/cascade system:
+// custom properties, element-type selectors, an #id selector overriding one
+// specific limb, a .class selector, and sensor[attr="value"] targeting.
+robot styled_quadruped {
+    body {
+        shape: box;
+        material: carbon_fiber;
+        dimensions: [500mm, 250mm, 120mm];
+    }
+
+    leg front_left  { joints: 3; reach: 350mm; actuator: brushless; class: lead_leg; }
+    leg front_right { joints: 3; reach: 350mm; actuator: brushless; }
+    leg rear_left   { joints: 3; reach: 350mm; actuator: brushless; }
+    leg rear_right  { joints: 3; reach: 350mm; actuator: brushless; }
+
+    sensors {
+        imu body { model: bmi088; }
+        camera front { model: realsense-d455; }
+        lidar top { model: rplidar-a2; }
+    }
+
+    style {
+        // Custom properties — declare once, reuse anywhere via var(--name).
+        --primary: "#22252b";
+        --accent: "#00ffaa";
+        --warning: "#ff3b30";
+
+        // Element-type selector: every leg segment on the whole robot.
+        body { color: var(--primary); }
+        leg   { color: "#333333"; }
+
+        // #id selector: overrides the element-type rule above for just this
+        // one limb's segments, regardless of source order (higher specificity
+        // always wins) — see front_right/rear_left/rear_right stay grey,
+        // front_left turns red below.
+        #front_left { color: var(--warning); }
+
+        // .class selector: targets whichever limb(s) declared `class: lead_leg;`
+        // (front_left, in this file) — a second, independent way to target
+        // the same or a different set of parts than #id.
+        .lead_leg { emission: "yellow"; }
+
+        // Attribute selectors: target sensors by kind, not by label.
+        sensor[type="camera"] { color: "black"; }
+        sensor[type="lidar"]  { color: var(--accent); }
+
+        // Bare "joint" element selector: every joint on the robot.
+        joint { material: "steel"; }
+    }
+}

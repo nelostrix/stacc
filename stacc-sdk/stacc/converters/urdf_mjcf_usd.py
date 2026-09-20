@@ -211,6 +211,22 @@ class ModelTranspiler:
                     material = ET.SubElement(g_parent, "material")
                     r, g, b, a = geom.color
                     ET.SubElement(material, "diffuse").text = f"{r} {g} {b} {a}"
+                    # SDF/Gazebo has a real PBR material model (unlike URDF,
+                    # which has no equivalent at all) — emit it for real
+                    # whenever a link declares metallic/roughness/emission,
+                    # rather than dropping that data on this export path.
+                    metallic = getattr(geom, "metallic", 0.0)
+                    roughness = getattr(geom, "roughness", 0.5)
+                    emission = getattr(geom, "emission", [0.0, 0.0, 0.0])
+                    if metallic != 0.0 or roughness != 0.5 or any(emission):
+                        if any(emission):
+                            er, eg, eb = emission
+                            ET.SubElement(material, "emissive").text = f"{er} {eg} {eb} 1"
+                        pbr = ET.SubElement(material, "pbr")
+                        metal = ET.SubElement(pbr, "metal")
+                        ET.SubElement(metal, "albedo").text = f"{r} {g} {b} {a}"
+                        ET.SubElement(metal, "metalness").text = str(metallic)
+                        ET.SubElement(metal, "roughness").text = str(roughness)
 
         for joint in robot.joints:
             sdf_type = joint_type_map.get(joint.type, "fixed")

@@ -79,11 +79,88 @@ array         := '[' (value (',' value)*)? ']'
 | `arm` / `leg` / `wheel` / `gripper` / `head` (directly under the robot, or nested one level inside `actuators { }`) | A child `Link` + `Joint`, attached to the root. `wheel` gets a `continuous` joint; everything else `revolute`. |
 | ...with `joints: N` (N > 1) | An **N-segment serial chain** instead of a single joint — `arm left { joints: 6; reach: 900mm; }` produces `arm_left_1 … arm_left_6`, each its own revolute joint, `reach` split evenly across segments. Alternates Y/Z rotation axes down the chain. |
 | `sensors { ... }` | Each child becomes a sensor via `Robot.attach_sensor`. `lidar`/`camera`/`imu` kinds are wired to the **real** `stacc.sensors` drivers (so they produce actual MuJoCo-backed data in `stacc rss run --sim`); any other kind falls back to a generic, inert `SensorSpec` so nothing is silently dropped. |
-| `appearance` / `style` | A child block whose name matches the root block's name, or an existing limb's link name, has its `color:` applied to that link's geometry. Other named entries (e.g. an `accent` swatch with no matching link) are kept as metadata only. |
+| `appearance` / `style` | Real CSS-like selectors + cascade — see "Styling: selectors, variables, cascade" below. |
 | `component "name" { ... }` + `use name;` | The component's own properties become **defaults** (the using block's own properties win on conflict); its child blocks are prepended. Applied recursively at every nesting depth, with cycle detection. |
 | `use "path/to/file.rss:name";` | Cross-file component reuse — resolves `path/to/file.rss` against the compiling file's own directory, then any `--rss-path` directories, and pulls `name` from that file's `component` defs. This is the actual "shared stylesheet" behavior, not just per-file defaults. |
 | Anything else at the top level (e.g. a `navigation { ... }` block) | Not a recognized structural block, so nothing is built from it — but it's **never silently dropped**: its properties land in `robot.rss_metadata[block_name]`, and a warning is emitted (`stacc rss check`/`build` print it; also available as `robot.rss_warnings`). |
 | Any property that doesn't map onto a `Link`/`Joint`/`Geometry` field (`payload`, `actuator`, `motor`, sensor `model:` strings, ...) | Preserved verbatim in `robot.rss_metadata[link_name]`, unit-normalized, so it's inspectable even though nothing consumes it structurally yet. |
+
+## Styling: selectors, variables, cascade
+
+`appearance` / `style` blocks (the two names are aliases) support real
+CSS-like selectors, `--custom-properties`, and a cascade — not just
+per-link flat colors keyed by exact name.
+
+```
+robot demo {
+    body { shape: box; }
+    arm left_arm { joints: 3; class: primary; }
+    arm right_arm { joints: 3; }
+
+    sensors {
+        camera front { model: realsense-d455; }
+    }
+
+    style {
+        --primary: "#151515";
+        --accent: "#00ffaa";
+
+        body { color: var(--primary); }        // element type -> root link
+        arm  { color: "#333333"; }              // element type -> every arm segment
+        #left_arm { color: "red"; }              // id (a block's label) -> that whole limb
+        .primary { emission: "yellow"; }         // class (declared via `class: primary;`)
+        sensor[type="camera"] { color: "black"; } // attribute selector on sensor kind
+        joint { material: "steel"; }             // element type -> every joint
+    }
+}
+```
+
+- **Element type selectors** — a bare `chassis`/`body`/`arm`/`leg`/`wheel`/
+  `gripper`/`head`/`joint`/`sensor` matches every compiled element of that
+  type (every segment of every multi-joint chain, every joint, every
+  sensor).
+- **`#id` selectors** — the id is a limb's own **label** (`arm left_arm { }`
+  → `#left_arm`). Matches every link generated from that labeled block
+  (all segments of a multi-joint chain share one id), so you can restyle
+  one specific limb without touching the others.
+- **`.class` selectors** — declare `class: name;` (or `classes: [a, b];`
+  for more than one) on any structural block or sensor; `.name { ... }`
+  then matches everything tagged with it.
+- **Attribute selectors** — `sensor[type="camera"]` / `sensor[type="lidar"]`
+  / `sensor[type="imu"]` match sensors by kind; any other
+  `sensor[key="value"]` matches against that sensor's own metadata
+  properties.
+- **`--custom-properties` and `var()`** — declare `--name: value;` directly
+  inside a `style`/`appearance` block (order matters: a `--x` can reference
+  an earlier `--y`, not a later one), then use `var(--name)` anywhere a
+  value is expected. Referencing an undeclared property is a real compile
+  error (`RSSCompileError`), not a silent no-op.
+- **Named colors** — `color: "red";`, `"black"`, `"white"`, and a small set
+  of other CSS-style names work alongside hex strings (`"#RRGGBB"` /
+  `"#RRGGBBAA"`); both must still be quoted like every other RSS string.
+- **Cascade** — when more than one rule matches the same target, the
+  highest-specificity rule wins (`#id` > `.class`/`attr[...]` > bare
+  element type), and among equal-specificity rules the one written later
+  wins — real CSS semantics, not "last rule in the file always wins."
+- **Backward compatible** — the original addressing mode still works
+  exactly as before: a bare child block whose name is either the root
+  block's own name (`chassis`/`body`) or an exact compiled link name
+  (e.g. spelling out `arm_left` directly) targets that one link, at the
+  same specificity as an `#id` selector.
+- **Real material properties** — `material: <name>;` applies a named preset
+  (`aluminum`, `steel`, `brushed_steel`, `brass`, `copper`, `carbon_fiber`,
+  `plastic`, `rubber`, `wood`, `glass`, `brushless`, `servo`) that sets real
+  color + `metallic`/`roughness`; an explicit `color:`/`metallic:`/
+  `roughness:` on the same block still wins for that specific field.
+  `emission: "#RRGGBB";` and `transparency: 0..1;` (or `opacity: 0..1;`,
+  its inverse) are real too. All of it is applied to `Link.visual`/
+  `Link.collision` and flows into real output: MJCF gets a real
+  `<asset><material>` (referenced by the geom instead of a placeholder
+  rainbow color), SDF/Gazebo gets a real `<material><pbr><metal>` block.
+  URDF has no material model beyond flat color at the format level, so it
+  honestly only carries `color:` there — not a stacc limitation, a URDF one.
+  Anything targeting a `sensor`/`joint` (which have no `Geometry` to color)
+  is still captured faithfully in `.properties`/`robot.rss_metadata`.
 
 ## From idea to physical robot
 
@@ -135,8 +212,11 @@ generates a starting point that targets it.
   matched to specific hardware profiles — only the generic sensor *kind*
   (`lidar`/`camera`/`imu`) selects a real driver; the model name is kept as
   metadata for now.
-- `appearance`/`style` only assigns flat colors to whole links, not
-  per-geometry materials/textures.
+- `color:`/`material:`/`metallic:`/`roughness:`/`emission:`/`transparency:`
+  all have real effects now (see "Styling" above), but still per whole
+  link, not per-geometry — no texture maps/UVs, no decals, and URDF export
+  only ever carries flat color (a real limit of the URDF format, not of
+  stacc).
 - Cross-file `use` resolves one file deep per reference (a library file can
   itself `use` other libraries — that's supported — but there's no package
   manager or versioning around it, just relative paths / `--rss-path`).
@@ -154,3 +234,5 @@ See `examples/*.rss`:
 - `drone.rss` — a quadcopter with IMU/GPS/camera.
 - `factorybot.rss` / `lib_industrial_arm.rss` / `factorybot_shared_lib.rss` —
   same-file vs. cross-file `component`/`use` reuse, side by side.
+- `styled_quadruped.rss` — the same shape as `quadruped.rss`, demonstrating
+  `--variables`, element/`#id`/`.class`/`attr[...]` selectors, and cascade.

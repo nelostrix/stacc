@@ -96,6 +96,10 @@ class Geometry:
         color: Optional[List[float]] = None,
         contype: Optional[int] = None,
         conaffinity: Optional[int] = None,
+        metallic: float = 0.0,
+        roughness: float = 0.5,
+        emission: Optional[List[float]] = None,
+        material_name: Optional[str] = None,
     ):
         self.shape = shape  # "box", "cylinder", "sphere", "mesh"
         self.size = size or [0.1, 0.1, 0.1]
@@ -108,9 +112,27 @@ class Geometry:
         # MuJoCo collision filtering (None = default, contacts enabled).
         self.contype = contype
         self.conaffinity = conaffinity
+        # Real PBR-ish material properties — exported for real into MJCF
+        # (an <asset><material>) and SDF (<material><pbr>); URDF has no
+        # material model beyond a flat color, so these are honestly dropped
+        # there. `material_name` (e.g. "aluminum") is metadata only — it's
+        # what set metallic/roughness/color as a preset, kept for the record.
+        self.metallic = max(0.0, min(1.0, metallic))
+        self.roughness = max(0.0, min(1.0, roughness))
+        self.emission = emission or [0.0, 0.0, 0.0]  # RGB, additive glow
+        self.material_name = material_name
 
     def to_dict(self) -> Dict[str, Any]:
-        d = {"shape": self.shape, "origin": self.origin, "color": self.color}
+        d = {
+            "shape": self.shape,
+            "origin": self.origin,
+            "color": self.color,
+            "metallic": self.metallic,
+            "roughness": self.roughness,
+            "emission": self.emission,
+        }
+        if self.material_name:
+            d["material_name"] = self.material_name
         if self.shape == "box":
             d["size"] = self.size
         elif self.shape == "cylinder":
@@ -127,6 +149,12 @@ class Geometry:
             d["conaffinity"] = self.conaffinity
         return d
 
+    @property
+    def has_custom_material(self) -> bool:
+        """Whether this geometry needs a real named <material> asset on
+        export, vs. the plain inline rgba path every geom already had."""
+        return self.metallic != 0.0 or self.roughness != 0.5 or any(self.emission)
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Geometry":
         return cls(
@@ -140,6 +168,10 @@ class Geometry:
             color=d.get("color"),
             contype=d.get("contype"),
             conaffinity=d.get("conaffinity"),
+            metallic=d.get("metallic", 0.0),
+            roughness=d.get("roughness", 0.5),
+            emission=d.get("emission"),
+            material_name=d.get("material_name"),
         )
 
 

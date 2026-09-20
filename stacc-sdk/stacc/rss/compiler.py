@@ -30,7 +30,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 from stacc.core.link import Geometry, Inertia, Link
 from stacc.core.joint import Joint
 from stacc.core.robot_base import Robot
-from stacc.rss.ast_nodes import Block, ComponentDef, Document, NumberValue, RobotDef, Value
+from stacc.rss.ast_nodes import Block, ComponentDef, Document, NumberValue, RobotDef, Value, VarRef
 from stacc.rss.errors import RSSCompileError
 from stacc.rss.parser import parse
 
@@ -93,8 +93,22 @@ def normalize(value: Value) -> Any:
     return value  # already a plain str
 
 
+# A small, deliberately non-exhaustive set of CSS-style named colors —
+# common enough (black/white/red/...) that requiring hex for them would be
+# an odd papercut for a language explicitly modeled on CSS.
+_NAMED_COLORS = {
+    "black": "#000000", "white": "#ffffff", "red": "#ff0000",
+    "green": "#008000", "blue": "#0000ff", "yellow": "#ffff00",
+    "orange": "#ffa500", "purple": "#800080", "gray": "#808080",
+    "grey": "#808080", "cyan": "#00ffff", "magenta": "#ff00ff",
+    "silver": "#c0c0c0", "gold": "#ffd700", "brown": "#a52a2a",
+    "transparent": "#00000000",
+}
+
+
 def _hex_to_rgba(color: str) -> Optional[List[float]]:
-    s = color.lstrip("#")
+    named = _NAMED_COLORS.get(color.lower())
+    s = (named or color).lstrip("#")
     if len(s) not in (6, 8):
         return None
     try:
@@ -105,6 +119,73 @@ def _hex_to_rgba(color: str) -> Optional[List[float]]:
         return [r, g, b, a]
     except ValueError:
         return None
+
+
+# Named `material:` presets — real metallic/roughness/tint defaults, not
+# just a label kept in metadata. An explicit `color:`/`metallic:`/
+# `roughness:` alongside `material:` on the same block still wins (applied
+# after the preset in `_apply_visual_properties`), so the preset is only
+# ever a starting point, never a silent override of what you actually wrote.
+MATERIAL_PRESETS: Dict[str, Dict[str, Any]] = {
+    "aluminum":     {"color": [0.75, 0.76, 0.78, 1.0], "metallic": 0.9, "roughness": 0.35},
+    "steel":        {"color": [0.56, 0.57, 0.58, 1.0], "metallic": 0.85, "roughness": 0.3},
+    "brushed_steel": {"color": [0.6, 0.6, 0.62, 1.0], "metallic": 0.8, "roughness": 0.5},
+    "brass":        {"color": [0.71, 0.65, 0.26, 1.0], "metallic": 0.85, "roughness": 0.3},
+    "copper":       {"color": [0.72, 0.45, 0.2, 1.0], "metallic": 0.9, "roughness": 0.25},
+    "carbon_fiber": {"color": [0.08, 0.08, 0.09, 1.0], "metallic": 0.2, "roughness": 0.4},
+    "plastic":      {"color": [0.8, 0.8, 0.8, 1.0], "metallic": 0.0, "roughness": 0.6},
+    "rubber":       {"color": [0.1, 0.1, 0.1, 1.0], "metallic": 0.0, "roughness": 0.9},
+    "wood":         {"color": [0.55, 0.37, 0.2, 1.0], "metallic": 0.0, "roughness": 0.7},
+    "glass":        {"color": [0.85, 0.9, 0.95, 0.25], "metallic": 0.0, "roughness": 0.05},
+    "brushless":    {"color": [0.15, 0.15, 0.16, 1.0], "metallic": 0.7, "roughness": 0.4},
+    "servo":        {"color": [0.2, 0.2, 0.22, 1.0], "metallic": 0.3, "roughness": 0.5},
+}
+
+
+def _apply_visual_properties(geo: Geometry, props: Dict[str, Any]) -> None:
+    """Mutate a Geometry's real visual fields from resolved RSS properties.
+    Shared by initial construction (`_block_to_geometry`) and the style
+    cascade (`_apply_style_rules`) so `material:`/`color:`/`metallic:`/
+    `roughness:`/`emission:`/`transparency:`/`opacity:` behave identically
+    whether declared directly on a structural block or via a selector rule.
+    """
+    material_name = props.get("material")
+    if isinstance(material_name, str) and material_name in MATERIAL_PRESETS:
+        preset = MATERIAL_PRESETS[material_name]
+        geo.color = list(preset["color"])
+        geo.metallic = preset["metallic"]
+        geo.roughness = preset["roughness"]
+        geo.material_name = material_name
+
+    color_val = props.get("color")
+    if isinstance(color_val, str):
+        rgba = _hex_to_rgba(color_val)
+        if rgba:
+            geo.color = rgba
+
+    metallic_val = props.get("metallic")
+    if isinstance(metallic_val, (int, float)):
+        geo.metallic = max(0.0, min(1.0, float(metallic_val)))
+
+    roughness_val = props.get("roughness")
+    if isinstance(roughness_val, (int, float)):
+        geo.roughness = max(0.0, min(1.0, float(roughness_val)))
+
+    emission_val = props.get("emission")
+    if isinstance(emission_val, str):
+        rgba = _hex_to_rgba(emission_val)
+        if rgba:
+            geo.emission = rgba[:3]
+
+    # transparency: 0 (opaque) .. 1 (fully transparent); opacity is its
+    # inverse. Either can adjust the alpha channel of whatever color is
+    # already set (from this same call or an earlier one).
+    transparency_val = props.get("transparency")
+    if isinstance(transparency_val, (int, float)):
+        geo.color = [geo.color[0], geo.color[1], geo.color[2], max(0.0, min(1.0, 1.0 - float(transparency_val)))]
+    opacity_val = props.get("opacity")
+    if isinstance(opacity_val, (int, float)):
+        geo.color = [geo.color[0], geo.color[1], geo.color[2], max(0.0, min(1.0, float(opacity_val)))]
 
 
 # ══════════════════════════════════════════
@@ -206,6 +287,8 @@ def _resolve_block_uses(
         properties=merged_properties,
         children=resolved_children,
         uses=[],
+        selector=block.selector,
+        var_decls=dict(block.var_decls),
     )
 
 
@@ -224,6 +307,22 @@ def _block_metadata(block: Block) -> Dict[str, Any]:
     return {k: normalize(v) for k, v in block.properties.items()}
 
 
+def _classes_of(block: Block) -> List[str]:
+    """CSS-style classes for selector matching (`.warning { ... }`) — declared
+    on the structural block itself as `class: name;` or `classes: [a, b];`.
+    Both spellings are accepted since either reads naturally depending on
+    whether there's one or several.
+    """
+    classes: List[str] = []
+    single = _prop(block, "class")
+    if isinstance(single, str):
+        classes.append(single)
+    multi = _prop(block, "classes")
+    if isinstance(multi, list):
+        classes.extend(str(c) for c in multi if isinstance(c, str))
+    return classes
+
+
 def _block_to_geometry(block: Block, default_length: Optional[float] = None) -> Geometry:
     """`default_length` is used to size an otherwise-unspecified segment of a
     multi-joint limb chain (see `_limb_segment_lengths`) — ignored whenever
@@ -234,7 +333,6 @@ def _block_to_geometry(block: Block, default_length: Optional[float] = None) -> 
     dims = _prop(block, "dimensions")
     radius = _prop(block, "radius")
     length = _prop(block, "length")
-    color_val = _prop(block, "color")
 
     if shape in KNOWN_GEOMETRY_SHAPES:
         geom_shape = shape
@@ -256,10 +354,7 @@ def _block_to_geometry(block: Block, default_length: Optional[float] = None) -> 
         kwargs["radius"] = radius
 
     geometry = Geometry(shape=geom_shape, **kwargs)
-    if isinstance(color_val, str):
-        rgba = _hex_to_rgba(color_val)
-        if rgba:
-            geometry.color = rgba
+    _apply_visual_properties(geometry, _block_metadata(block))
     return geometry
 
 
@@ -349,6 +444,154 @@ def _build_sensor(sub: Block):
     return SensorSpec(kind=sub.name, label=sub.label, properties=_block_metadata(sub))
 
 
+def _resolve_vars(value: Any, variables: Dict[str, Any]) -> Any:
+    """Substitute any `var(--name)` in a parsed value against already-resolved
+    custom properties. Declaration order matters: a `--x` can reference an
+    earlier `--y` in the same style block, not a later one (same as CSS
+    custom properties evaluate top-to-bottom).
+    """
+    if isinstance(value, VarRef):
+        if value.name not in variables:
+            raise RSSCompileError(
+                f"undefined custom property '{value.name}' (referenced via var()) "
+                f"— declare it first with '{value.name}: ...;'"
+            )
+        return variables[value.name]
+    if isinstance(value, list):
+        return [_resolve_vars(v, variables) for v in value]
+    return value
+
+
+def _apply_style_rules(
+    appearance_blocks: List[Block],
+    root_block: Optional[Block],
+    root_name: str,
+    all_links: Dict[str, Link],
+    link_kind: Dict[str, str],
+    link_id: Dict[str, str],
+    link_classes: Dict[str, List[str]],
+    robot: Robot,
+    metadata: Dict[str, Dict[str, Any]],
+) -> None:
+    """Apply every `appearance`/`style` rule as a real cascade: resolve
+    `--vars`, match each rule's selector against the compiled robot's
+    links/joints/sensors, then apply in (specificity, source-order) so
+    higher-specificity and later rules correctly win — the same idea `color:`
+    already had for one exact-name match, generalized to real selectors
+    (#id / .class / elem[attr="value"] / bare element-type) plus variables.
+
+    Only `color` has a real effect today (the one visual property RSS's
+    Geometry actually carries through to MJCF/URDF) — every other declared
+    property is still captured faithfully in `robot.rss_metadata`, exactly
+    like the original single-match version, rather than pretending a
+    `material:`/`emission:` property does something the renderer doesn't
+    support yet.
+    """
+    appearance_meta: Dict[str, Any] = metadata.setdefault("__appearance__", {})
+    element_types = ROOT_BLOCK_NAMES | LIMB_BLOCK_NAMES
+
+    # (specificity, source_order, target_kind, target, resolved_properties)
+    applications: List[Tuple[int, int, str, Any, Dict[str, Any]]] = []
+    order = 0
+
+    for appearance_block in appearance_blocks:
+        variables: Dict[str, Any] = {}
+        for var_name, raw_value in appearance_block.var_decls.items():
+            variables[var_name] = normalize(_resolve_vars(raw_value, variables))
+
+        for sub in appearance_block.children:
+            resolved_props = {
+                k: normalize(_resolve_vars(v, variables)) for k, v in sub.properties.items()
+            }
+            appearance_meta[sub.name] = resolved_props
+            selector = sub.selector
+
+            if selector is None:
+                # Legacy shape: a bare `name { ... }` child, checked from most
+                # to least specific so a real match is never shadowed by a
+                # coincidentally-named element type:
+                #   1. names an exact compiled link (spelling out "arm_left"
+                #      directly — the original, only way to target one part).
+                #   2. names the root block's own name ("chassis"/"body").
+                #   3. is a recognized element-type keyword -> every element
+                #      of that type (new: previously these were inert).
+                if sub.name in all_links:
+                    applications.append((100, order, "link", sub.name, resolved_props))
+                elif root_block is not None and sub.name == root_block.name:
+                    applications.append((100, order, "link", root_name, resolved_props))
+                elif sub.name in element_types:
+                    for link_name, kind in link_kind.items():
+                        if kind == sub.name:
+                            applications.append((1, order, "link", link_name, resolved_props))
+                elif sub.name == "joint":
+                    for j in robot.joints:
+                        applications.append((1, order, "joint", j.name, resolved_props))
+                elif sub.name == "sensor":
+                    for s in robot.sensors:
+                        applications.append((1, order, "sensor", s, resolved_props))
+                # else: an unrecognized name with nothing to match — already
+                # captured above in appearance_meta, never silently dropped.
+                order += 1
+                continue
+
+            # New selector-rule shape: #id, .class, and/or elem[attr="value"].
+            specificity = selector.specificity()
+
+            if selector.id is not None:
+                for link_name, lid in link_id.items():
+                    if lid == selector.id:
+                        applications.append((specificity, order, "link", link_name, resolved_props))
+
+            if selector.classes:
+                for link_name, classes in link_classes.items():
+                    if any(c in classes for c in selector.classes):
+                        applications.append((specificity, order, "link", link_name, resolved_props))
+                for s in robot.sensors:
+                    s_classes = s.properties.get("classes") or []
+                    single = s.properties.get("class")
+                    if isinstance(single, str):
+                        s_classes = [*s_classes, single]
+                    if any(c in s_classes for c in selector.classes):
+                        applications.append((specificity, order, "sensor", s, resolved_props))
+
+            if selector.element == "sensor":
+                for s in robot.sensors:
+                    if selector.attr is None:
+                        matches = True
+                    elif selector.attr[0] == "type":
+                        matches = s.kind == selector.attr[1]
+                    else:
+                        matches = s.properties.get(selector.attr[0]) == selector.attr[1]
+                    if matches:
+                        applications.append((specificity, order, "sensor", s, resolved_props))
+            elif selector.element == "joint":
+                for j in robot.joints:
+                    applications.append((specificity, order, "joint", j.name, resolved_props))
+            elif selector.element in element_types:
+                for link_name, kind in link_kind.items():
+                    if kind == selector.element:
+                        applications.append((specificity, order, "link", link_name, resolved_props))
+
+            order += 1
+
+    # Stable sort: equal-specificity rules apply in source order, so a later
+    # rule correctly wins the tie — real CSS cascade semantics.
+    applications.sort(key=lambda a: (a[0], a[1]))
+
+    for _, _, kind, target, props in applications:
+        if kind == "link":
+            link_obj = all_links.get(target)
+            if link_obj is not None:
+                if link_obj.visual:
+                    _apply_visual_properties(link_obj.visual, props)
+                if link_obj.collision:
+                    _apply_visual_properties(link_obj.collision, props)
+        elif kind == "sensor":
+            target.properties.update(props)
+        elif kind == "joint":
+            metadata.setdefault(f"joint:{target}", {}).update(props)
+
+
 def _unique_name(base: str, taken: set) -> str:
     name = base
     i = 2
@@ -385,6 +628,12 @@ def compile_robot(
     metadata: Dict[str, Dict[str, Any]] = {"__robot__": _block_metadata(resolved)}
     all_links: Dict[str, Link] = {}
     used_names: set = set()
+    # Selector bookkeeping for the style/appearance pass below — which
+    # element type, id (from a block's label), and CSS-style classes each
+    # compiled link came from.
+    link_kind: Dict[str, str] = {}
+    link_id: Dict[str, str] = {}
+    link_classes: Dict[str, List[str]] = {}
 
     # ── root link (body / chassis) ──
     root_block: Optional[Block] = None
@@ -406,6 +655,11 @@ def compile_robot(
     robot.add_link(root_link)
     robot.fixed_base = shape not in MOBILE_SHAPES
     all_links[root_name] = root_link
+    link_kind[root_name] = root_block.name if root_block is not None else "chassis"
+    if root_block is not None:
+        if root_block.label:
+            link_id[root_name] = root_block.label
+        link_classes[root_name] = _classes_of(root_block)
 
     # ── limbs: direct named blocks, plus one level inside `actuators { }` ──
     limb_blocks: List[Block] = list(resolved.children_named(*LIMB_BLOCK_NAMES))
@@ -452,6 +706,10 @@ def compile_robot(
 
             all_links[link_name] = link
             metadata[link_name] = limb_meta
+            link_kind[link_name] = limb.name
+            if limb.label:
+                link_id[link_name] = limb.label
+            link_classes[link_name] = _classes_of(limb)
             chain_link_names.append(link_name)
             parent_name = link_name
             prev_length = seg_length
@@ -467,26 +725,18 @@ def compile_robot(
         for s in sensors_block.children:
             robot.attach_sensor(_build_sensor(s), position=s.label or "body")
 
-    # ── appearance / style: apply color to a matching link, keep the rest as metadata ──
-    for appearance_block in resolved.children_named(*APPEARANCE_CONTAINER_NAMES):
-        appearance_meta: Dict[str, Any] = metadata.setdefault("__appearance__", {})
-        for sub in appearance_block.children:
-            target_name = None
-            if root_block is not None and sub.name == root_block.name:
-                target_name = root_name
-            elif sub.name in all_links:
-                target_name = sub.name
-
-            color_val = _prop(sub, "color")
-            if target_name and isinstance(color_val, str):
-                rgba = _hex_to_rgba(color_val)
-                if rgba:
-                    link_obj = all_links[target_name]
-                    if link_obj.visual:
-                        link_obj.visual.color = rgba
-                    if link_obj.collision:
-                        link_obj.collision.color = rgba
-            appearance_meta[sub.name] = _block_metadata(sub)
+    # ── appearance / style: real CSS-like selectors, variables, and cascade ──
+    _apply_style_rules(
+        appearance_blocks=resolved.children_named(*APPEARANCE_CONTAINER_NAMES),
+        root_block=root_block,
+        root_name=root_name,
+        all_links=all_links,
+        link_kind=link_kind,
+        link_id=link_id,
+        link_classes=link_classes,
+        robot=robot,
+        metadata=metadata,
+    )
 
     # ── anything else at the top level (e.g. `navigation { ... }`) isn't a
     # recognized block type, so nothing gets built from it — but its

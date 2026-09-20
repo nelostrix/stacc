@@ -22,12 +22,18 @@ _PUNCTUATION = {
     ":": "COLON",
     ";": "SEMICOLON",
     ",": "COMMA",
+    "#": "HASH",       # id selector, e.g. #left_arm { ... }
+    ".": "DOT",        # class selector, e.g. .warning { ... }
+    "(": "LPAREN",     # var(...)
+    ")": "RPAREN",
+    "=": "EQUALS",     # attribute selector, e.g. sensor[type="camera"]
 }
 
 
 @dataclass
 class Token:
-    kind: str  # IDENT, STRING, NUMBER, LBRACE, RBRACE, LBRACKET, RBRACKET, COLON, SEMICOLON, COMMA, EOF
+    kind: str  # IDENT, STRING, NUMBER, CUSTOM_PROP, LBRACE, RBRACE, LBRACKET, RBRACKET,
+               # COLON, SEMICOLON, COMMA, HASH, DOT, LPAREN, RPAREN, EQUALS, EOF
     value: object
     unit: Optional[str]
     line: int
@@ -127,6 +133,18 @@ class Lexer:
             chars.append(self._advance())
         return Token("IDENT", "".join(chars), None, start_line, start_col)
 
+    def _read_custom_property(self) -> Token:
+        """A CSS-style custom property name: `--primary`, `--accent-2`."""
+        start_line, start_col = self.line, self.col
+        self._advance()  # first '-'
+        self._advance()  # second '-'
+        chars: List[str] = []
+        while _is_ident_char(self._peek()):
+            chars.append(self._advance())
+        if not chars:
+            raise self._error("expected a name after '--'")
+        return Token("CUSTOM_PROP", f"--{''.join(chars)}", None, start_line, start_col)
+
     def tokenize(self) -> List[Token]:
         tokens: List[Token] = []
         while True:
@@ -142,6 +160,8 @@ class Lexer:
                 tokens.append(self._read_string())
             elif ch.isdigit():
                 tokens.append(self._read_number())
+            elif ch == "-" and self._peek(1) == "-":
+                tokens.append(self._read_custom_property())
             elif _is_ident_start(ch):
                 tokens.append(self._read_ident())
             elif ch in _PUNCTUATION:

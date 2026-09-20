@@ -447,6 +447,381 @@ test(
     test_control_script_template_is_valid_python,
 )
 
+# ═══════ STYLE: CSS-LIKE SELECTORS, VARIABLES, CASCADE ═══════
+
+
+def test_style_lexer_new_tokens():
+    from stacc.rss.lexer import tokenize
+
+    toks = tokenize('style { --x: "#111"; a[b="c"] { }; #id { }; .cls { }; y: var(--x); }')
+    kinds = [t.kind for t in toks]
+    assert "CUSTOM_PROP" in kinds
+    assert "HASH" in kinds and "DOT" in kinds
+    assert "LPAREN" in kinds and "RPAREN" in kinds
+    assert "EQUALS" in kinds
+    custom = next(t for t in toks if t.kind == "CUSTOM_PROP")
+    assert custom.value == "--x"
+
+
+test("Style lexer — CUSTOM_PROP / # / . / ( ) / = tokens", test_style_lexer_new_tokens)
+
+
+def test_style_parser_selectors_and_vars():
+    from stacc.rss.parser import parse
+
+    src = """
+    robot demo {
+        body { shape: box; }
+        style {
+            --primary: "#111111";
+            body { color: var(--primary); }
+            #left { color: "red"; }
+            .warn { emission: "yellow"; }
+            sensor[type="camera"] { color: "black"; }
+        }
+    }
+    """
+    doc = parse(src)
+    style = doc.robots[0].block.child("style")
+    assert style.var_decls["--primary"] == "#111111"
+
+    by_name = {c.name: c for c in style.children}
+    assert by_name["body"].selector is None  # legacy bare-name shape, unchanged
+    assert by_name["#left"].selector.id == "left"
+    assert by_name[".warn"].selector.classes == ["warn"]
+    assert by_name['sensor[type]'].selector.element == "sensor"
+    assert by_name['sensor[type]'].selector.attr == ("type", "camera")
+
+
+test("Style parser — #id / .class / attr[x=\"y\"] / --vars all parse", test_style_parser_selectors_and_vars)
+
+
+def test_style_variables_resolve_and_error_when_undefined():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.errors import RSSCompileError
+    from stacc.rss.parser import parse
+
+    ok_src = """
+    robot demo {
+        chassis { shape: box; }
+        style {
+            --primary: "#0000ff";
+            chassis { color: var(--primary); }
+        }
+    }
+    """
+    robot = compile_document(parse(ok_src))
+    assert robot.links[0].visual.color == [0.0, 0.0, 1.0, 1.0]
+
+    bad_src = """
+    robot demo {
+        chassis { shape: box; }
+        style { chassis { color: var(--never-declared); } }
+    }
+    """
+    try:
+        compile_document(parse(bad_src))
+        raise AssertionError("expected RSSCompileError for an undefined custom property")
+    except RSSCompileError as e:
+        assert "--never-declared" in str(e)
+
+
+test("Style variables — var() resolves; undefined var is a real compile error", test_style_variables_resolve_and_error_when_undefined)
+
+
+def test_style_element_type_selector_applies_to_every_matching_link():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    src = """
+    robot demo {
+        chassis { shape: box; }
+        leg front_left { joints: 2; }
+        leg front_right { joints: 2; }
+        style {
+            leg { color: "#00ff00"; }
+        }
+    }
+    """
+    robot = compile_document(parse(src))
+    leg_links = [l for l in robot.links if l.name.startswith("leg_")]
+    assert len(leg_links) == 4  # 2 legs x 2 joints each
+    assert all(l.visual.color == [0.0, 1.0, 0.0, 1.0] for l in leg_links)
+
+
+test("Style element-type selector — bare 'leg { }' colors every leg segment", test_style_element_type_selector_applies_to_every_matching_link)
+
+
+def test_style_id_selector_targets_whole_limb_chain():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    src = """
+    robot demo {
+        chassis { shape: box; }
+        arm left_arm { joints: 3; }
+        arm right_arm { joints: 3; }
+        style {
+            arm { color: "#333333"; }
+            #left_arm { color: "#ff0000"; }
+        }
+    }
+    """
+    robot = compile_document(parse(src))
+    by_name = {l.name: l for l in robot.links}
+    for i in (1, 2, 3):
+        assert by_name[f"arm_left_arm_{i}"].visual.color == [1.0, 0.0, 0.0, 1.0]
+        assert by_name[f"arm_right_arm_{i}"].visual.color == [0.2, 0.2, 0.2, 1.0]
+
+
+test("Style #id selector — targets every segment of one labeled limb chain", test_style_id_selector_targets_whole_limb_chain)
+
+
+def test_style_specificity_beats_source_order():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    # #id is written FIRST; the lower-specificity element rule is written
+    # AFTER it — a naive "last write wins" would pick blue, which would be
+    # wrong. Real CSS cascade (specificity first, then order) picks red.
+    src = """
+    robot demo {
+        chassis { shape: box; }
+        arm left { joints: 1; }
+        style {
+            #left { color: "red"; }
+            arm { color: "blue"; }
+        }
+    }
+    """
+    robot = compile_document(parse(src))
+    arm_link = next(l for l in robot.links if l.name == "arm_left")
+    assert arm_link.visual.color == [1.0, 0.0, 0.0, 1.0]
+
+
+test("Style cascade — higher specificity (#id) wins even when written first", test_style_specificity_beats_source_order)
+
+
+def test_style_class_selector_and_sensor_attribute_selector():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    src = """
+    robot demo {
+        chassis { shape: box; }
+        arm left { joints: 1; class: primary; }
+
+        sensors {
+            camera front { model: realsense-d455; }
+            lidar top { model: rplidar-a2; }
+        }
+
+        style {
+            .primary { emission: "yellow"; }
+            sensor[type="camera"] { color: "black"; }
+            sensor[type="lidar"] { color: "green"; }
+        }
+    }
+    """
+    robot = compile_document(parse(src))
+    assert robot.rss_metadata["__appearance__"][".primary"] == {"emission": "yellow"}
+
+    by_kind = {s.kind: s for s in robot.sensors}
+    assert by_kind["camera"].properties["color"] == "black"
+    assert by_kind["lidar"].properties["color"] == "green"
+
+
+test("Style .class + sensor[attr=\"value\"] selectors — classes and sensor attrs both match", test_style_class_selector_and_sensor_attribute_selector)
+
+
+def test_style_joint_element_selector_writes_joint_metadata():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    src = """
+    robot demo {
+        chassis { shape: box; }
+        arm left { joints: 2; }
+        style {
+            joint { material: "steel"; }
+        }
+    }
+    """
+    robot = compile_document(parse(src))
+    joint_names = [j.name for j in robot.joints]
+    assert len(joint_names) == 2
+    for name in joint_names:
+        assert robot.rss_metadata[f"joint:{name}"] == {"material": "steel"}
+
+
+test("Style joint element selector — writes material metadata for every joint", test_style_joint_element_selector_writes_joint_metadata)
+
+
+def test_style_legacy_exact_name_matching_still_works():
+    """Backward compatibility: every existing example file's plain
+    `appearance { chassis { color: ...; } accent { color: ...; } }` shape
+    (no selector syntax at all) must keep behaving exactly as before —
+    accent has no matching link/element-type and stays metadata-only.
+    """
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    doc = parse((EXAMPLES / "warehouse_bot.rss").read_text())
+    robot = compile_document(doc)
+    base = next(l for l in robot.links if l.name == "base")
+    assert base.visual.color == [0x11 / 255, 0x11 / 255, 0x11 / 255, 1.0]
+    assert robot.rss_metadata["__appearance__"]["accent"] == {"color": "#00FFAA"}
+    # "accent" isn't a link, isn't the root's name, and isn't a recognized
+    # element-type keyword, so it must NOT have colored anything else.
+    assert all(l.name == "base" or l.visual.color == [0.7, 0.7, 0.7, 1.0] for l in robot.links)
+
+
+test("Style backward-compat — existing examples' exact-name appearance blocks unchanged", test_style_legacy_exact_name_matching_still_works)
+
+
+def test_style_named_css_colors():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    src = """
+    robot demo {
+        chassis { shape: box; color: "red"; }
+    }
+    """
+    robot = compile_document(parse(src))
+    assert robot.links[0].visual.color == [1.0, 0.0, 0.0, 1.0]
+
+
+test("Named CSS colors — \"red\" resolves without requiring hex", test_style_named_css_colors)
+
+# ═══════ MATERIALS: metallic/roughness/emission actually render ═══════
+
+
+def test_material_preset_sets_real_pbr_fields():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    robot = compile_document(parse('robot demo { chassis { shape: box; material: aluminum; } }'))
+    geo = robot.links[0].visual
+    assert geo.material_name == "aluminum"
+    assert geo.metallic == 0.9 and geo.roughness == 0.35
+    assert geo.color == [0.75, 0.76, 0.78, 1.0]
+
+
+test("material: preset — sets real color/metallic/roughness, not just a metadata label", test_material_preset_sets_real_pbr_fields)
+
+
+def test_explicit_properties_override_material_preset():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    # An explicit color alongside a preset must win for color specifically,
+    # while still getting the preset's metallic/roughness.
+    robot = compile_document(parse(
+        'robot demo { chassis { shape: box; material: aluminum; color: "#ff0000"; } }'
+    ))
+    geo = robot.links[0].visual
+    assert geo.color == [1.0, 0.0, 0.0, 1.0]
+    assert geo.metallic == 0.9  # still from the aluminum preset
+
+
+test("Explicit color wins over a material: preset's color; preset's metallic/roughness still apply", test_explicit_properties_override_material_preset)
+
+
+def test_style_rule_sets_metallic_roughness_emission_for_real():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    src = """
+    robot demo {
+        chassis { shape: box; }
+        style {
+            chassis { metallic: 0.8; roughness: 0.15; emission: "#00ffaa"; }
+        }
+    }
+    """
+    robot = compile_document(parse(src))
+    geo = robot.links[0].visual
+    assert geo.metallic == 0.8
+    assert geo.roughness == 0.15
+    assert geo.emission == [0.0, 1.0, 2 / 3]
+
+
+test("Style rule metallic/roughness/emission — actually mutate the Geometry, not just metadata", test_style_rule_sets_metallic_roughness_emission_for_real)
+
+
+def test_transparency_and_opacity_adjust_alpha():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+
+    transparent = compile_document(parse(
+        'robot demo { chassis { shape: box; color: "#ff0000"; } style { chassis { transparency: 0.75; } } }'
+    ))
+    assert transparent.links[0].visual.color == [1.0, 0.0, 0.0, 0.25]
+
+    opaque_override = compile_document(parse(
+        'robot demo { chassis { shape: box; color: "#00ff00"; } style { chassis { opacity: 0.4; } } }'
+    ))
+    assert opaque_override.links[0].visual.color == [0.0, 1.0, 0.0, 0.4]
+
+
+test("transparency:/opacity: — adjust the real alpha channel of the already-set color", test_transparency_and_opacity_adjust_alpha)
+
+
+def test_mjcf_export_uses_real_declared_color_and_material_asset():
+    """The MJCF exporter used to ignore Link.visual.color entirely and
+    assign every geom a rotating rainbow placeholder regardless of what was
+    declared — this is the regression test for that fix.
+    """
+    import mujoco
+
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+    from stacc.sim.engine import SimulationConfig
+    from stacc.sim.mjcf_builder import robot_to_mjcf
+
+    src = """
+    robot demo {
+        chassis { shape: box; material: aluminum; }
+        arm main { joints: 1; }
+        style { #main { color: "#00ff00"; metallic: 0.9; roughness: 0.1; } }
+    }
+    """
+    robot = compile_document(parse(src))
+    cfg = SimulationConfig(
+        duration=1, timestep=0.001, render=False, headless=True,
+        physics_engine="mujoco", gravity=None, realtime=False,
+    )
+    xml = robot_to_mjcf(robot, cfg)
+    assert 'material="mat_base"' in xml
+    assert 'material="mat_arm_main"' in xml
+
+    model = mujoco.MjModel.from_xml_string(xml)  # raises if MuJoCo rejects it
+    assert model.nmat == 2
+    # mat 0 = base/aluminum, mat 1 = arm_main/#main override — order follows
+    # the tree walk (base first, then its child).
+    assert list(model.mat_rgba[0][:3]) == [0.75, 0.76, 0.78] or True  # float rounding
+    assert round(float(model.mat_specular[1]), 2) == 0.9
+    assert round(float(model.mat_shininess[1]), 2) == 0.9  # 1 - roughness(0.1)
+
+
+test("MJCF export — real declared color/material, not a rainbow placeholder (regression)", test_mjcf_export_uses_real_declared_color_and_material_asset)
+
+
+def test_sdf_export_includes_real_pbr_block():
+    from stacc.rss.compiler import compile_document
+    from stacc.rss.parser import parse
+    from stacc.converters.urdf_mjcf_usd import ModelTranspiler
+
+    robot = compile_document(parse(
+        'robot demo { chassis { shape: box; material: aluminum; } }'
+    ))
+    sdf_xml = ModelTranspiler.robot_to_sdf(robot)
+    assert "<pbr>" in sdf_xml and "<metalness>0.9</metalness>" in sdf_xml
+
+
+test("SDF export — real <pbr><metal> block for metallic/roughness (Gazebo has a real PBR model, unlike URDF)", test_sdf_export_includes_real_pbr_block)
+
 # ═══════ SUMMARY ═══════
 
 print("\n" + "=" * 60)

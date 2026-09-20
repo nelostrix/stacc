@@ -57,24 +57,71 @@ def _get_half_width(link) -> float:
     return 0.03
 
 
-def _geom_attrs(link, color_index: int) -> dict:
-    """Build MuJoCo geom attributes from a Link's visual geometry."""
-    attrs = {
-        "rgba": LINK_COLORS[color_index % len(LINK_COLORS)],
-        "mass": str(link.mass),
+DEFAULT_GEOMETRY_COLOR = [0.7, 0.7, 0.7, 1.0]
+
+
+def _material_attrs(name: str, geo) -> dict:
+    """A real MuJoCo <material> asset from a Geometry's declared color plus
+    metallic/roughness/emission. MuJoCo's shading model isn't literal PBR —
+    `emission` is a single brightness scalar that brightens the material's
+    *own* rgba, it can't glow an independent hue — so an emissive color is
+    honestly approximated by blending the base color toward it, not faked
+    as a true separate-color glow. `specular`/`shininess` stand in for
+    metallic/roughness (MuJoCo has no dedicated metalness channel).
+    """
+    r, g, b = geo.color[0], geo.color[1], geo.color[2]
+    a = geo.color[3] if len(geo.color) > 3 else 1.0
+    if any(geo.emission):
+        er, eg, eb = geo.emission[0], geo.emission[1], geo.emission[2]
+        r, g, b = (r + er) / 2, (g + eg) / 2, (b + eb) / 2
+    return {
+        "name": name,
+        "rgba": f"{r} {g} {b} {a}",
+        "specular": str(round(geo.metallic, 3)),
+        "shininess": str(round(1.0 - geo.roughness, 3)),
+        "emission": str(round(max(geo.emission), 3)) if geo.emission else "0",
+        "reflectance": str(round(geo.metallic * 0.5, 3)),
     }
 
-    # Optional MuJoCo collision filtering (e.g. self-collision-free chains).
+
+def _geom_attrs(link, color_index: int, assets: Optional[list] = None) -> dict:
+    """Build MuJoCo geom attributes from a Link's visual geometry.
+
+    `assets`, when given, collects a <material> dict whenever this link
+    declared real material properties (metallic/roughness/emission, or a
+    color different from the library default) — the geom then references
+    that material by name so it actually renders differently in MuJoCo,
+    instead of every geom silently getting the same rotating placeholder
+    palette regardless of what RSS (or any other caller) declared. Links
+    that never set anything keep the plain rotating palette, purely so an
+    auto-generated demo robot with no styling at all still has
+    visually distinguishable parts.
+    """
+    attrs = {"mass": str(link.mass)}
+
     geo = link.visual
+    if geo is None:
+        attrs["rgba"] = LINK_COLORS[color_index % len(LINK_COLORS)]
+        attrs["type"] = "box"
+        attrs["size"] = "0.03 0.03 0.03"
+        return attrs
+
+    has_explicit_color = list(geo.color) != DEFAULT_GEOMETRY_COLOR
+    if (has_explicit_color or geo.has_custom_material) and assets is not None:
+        mat_name = f"mat_{link.name}"
+        assets.append(_material_attrs(mat_name, geo))
+        attrs["material"] = mat_name
+    elif has_explicit_color:
+        c = geo.color
+        attrs["rgba"] = f"{c[0]} {c[1]} {c[2]} {c[3] if len(c) > 3 else 1.0}"
+    else:
+        attrs["rgba"] = LINK_COLORS[color_index % len(LINK_COLORS)]
+
+    # Optional MuJoCo collision filtering (e.g. self-collision-free chains).
     if getattr(geo, "contype", None) is not None:
         attrs["contype"] = str(geo.contype)
     if getattr(geo, "conaffinity", None) is not None:
         attrs["conaffinity"] = str(geo.conaffinity)
-
-    if link.visual is None:
-        attrs["type"] = "box"
-        attrs["size"] = "0.03 0.03 0.03"
-        return attrs
 
     shape = link.visual.shape
 
@@ -199,17 +246,25 @@ def robot_to_mjcf(robot, config) -> str:
         root, "option", timestep=str(config.timestep), gravity=f"{gx} {gy} {gz}"
     )
 
+    # Populated lazily as bodies are built below, then turned into real
+    # <material> elements once we know what's actually needed — kept before
+    # <worldbody> in document order to match convention, even though nothing
+    # is written into it until after the whole tree is walked.
+    asset_el = ET.SubElement(root, "asset")
+
     worldbody = ET.SubElement(root, "worldbody")
     ET.SubElement(worldbody, "light", pos="0 0 3", dir="0 0 -1")
     ET.SubElement(worldbody, "geom", type="plane", size="5 5 0.1", rgba="0.9 0.9 0.9 1")
 
     if not robot.links:
+        root.remove(asset_el)
         return ET.tostring(root, encoding="unicode")
 
     # ── Track state ──
     color_idx = [0]
     joint_order = []  # ordered list of joint names for actuator generation
     visited = set()  # prevent infinite loops
+    materials: list = []  # <material> dicts collected from styled links
 
     def _build_body(parent_element, link, joint_for_this, pos_str, is_root=False):
         """Recursively build a body and all its children."""
@@ -241,7 +296,7 @@ def robot_to_mjcf(robot, config) -> str:
         )
 
         # Geometry
-        geom_attrs = _geom_attrs(link, color_idx[0])
+        geom_attrs = _geom_attrs(link, color_idx[0], assets=materials)
         color_idx[0] += 1
         ET.SubElement(body, "geom", **geom_attrs)
 
@@ -274,6 +329,13 @@ def robot_to_mjcf(robot, config) -> str:
         z_offset = max(3.0, total_height * 2)
 
     _build_body(worldbody, root_link, None, f"0 0 {z_offset}", is_root=True)
+
+    # ── Materials collected while walking the tree above ──
+    if materials:
+        for mat_attrs in materials:
+            ET.SubElement(asset_el, "material", **mat_attrs)
+    else:
+        root.remove(asset_el)
 
     # ── Actuators (in joint_order to match MuJoCo's ctrl array) ──
     actuator_el = ET.SubElement(root, "actuator")
