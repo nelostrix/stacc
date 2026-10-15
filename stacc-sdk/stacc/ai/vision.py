@@ -384,6 +384,10 @@ class OpticalFlow:
             old, new = self._flow
             if len(old) == 0:
                 return 0.0, 0.0
+            # OpenCV returns tracked points shaped (N, 1, 2); flatten to (N, 2) so
+            # column 0 is x and column 1 is y.
+            old = np.asarray(old, dtype=float).reshape(-1, 2)
+            new = np.asarray(new, dtype=float).reshape(-1, 2)
             dx = float(np.mean(new[:, 0] - old[:, 0]))
             dy = float(np.mean(new[:, 1] - old[:, 1]))
             return dx, dy

@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections import deque
 from typing import Any, Callable, Dict, List, Optional
 
 from stacc.sim.engine import SimulationEngine, SimulationConfig
@@ -284,8 +285,14 @@ class StaccRuntime:
         self.control_mode = "JointImpedance"
         self._cmd_positions: Optional[List[float]] = None
 
+        # Loop timing. `step_time_ms` is how long one cycle's physics took;
+        # `jitter_ms` is the real timing jitter: the standard deviation of the time
+        # between consecutive cycle starts. Both are measured, never configured.
+        self.step_time_ms: float = 0.0
         self.jitter_ms: float = 0.0
         self.fps: float = 0.0
+        self._period_lock = threading.Lock()
+        self._periods: "deque[float]" = deque(maxlen=2000)  # seconds between cycle starts
 
     # ── lifecycle ──
 
@@ -409,15 +416,20 @@ class StaccRuntime:
         cycle = 1.0 / max(self.hz, 1e-9)
         substeps = max(1, int(round(1.0 / (max(self.hz, 1e-9) * self.config.timestep))))
         backend = self.engine._physics_backend
+        last_start: Optional[float] = None
         while not self._stop_event.is_set():
-            start = time.time()
+            start = time.perf_counter()
+            if last_start is not None:
+                with self._period_lock:
+                    self._periods.append(start - last_start)
+            last_start = start
             with self._lock:
                 if not self._stop_event.is_set() and self._running and not self._paused and backend is not None:
                     for _ in range(substeps):
                         self._substep(self.config.timestep)
                     self.engine.state.step += substeps
-            self.jitter_ms = (time.time() - start) * 1000.0
-            elapsed = time.time() - start
+            elapsed = time.perf_counter() - start
+            self.step_time_ms = elapsed * 1000.0
             time.sleep(max(0.0, cycle - elapsed))
 
     # ── joint command API ──
@@ -543,12 +555,46 @@ class StaccRuntime:
         except Exception:
             return None
 
+    def loop_stats(self) -> Dict[str, Any]:
+        """Measured timing of the background loop over its last ~2000 cycles.
+
+        Returns zeros until at least two cycles have run. The target period is
+        1/hz; `measured_hz` is what the loop actually achieves (time.sleep
+        granularity means this is usually a little under the target).
+        """
+        with self._period_lock:
+            periods = list(self._periods)
+        target_ms = 1000.0 / max(self.hz, 1e-9)
+        if len(periods) < 2:
+            return {
+                "target_hz": self.hz, "measured_hz": 0.0, "period_mean_ms": 0.0,
+                "jitter_ms": 0.0, "period_p99_ms": 0.0, "period_max_ms": 0.0,
+                "step_time_ms": round(self.step_time_ms, 4), "deadline_misses": 0,
+                "samples": len(periods),
+            }
+        ms = sorted(p * 1000.0 for p in periods)
+        mean = sum(ms) / len(ms)
+        var = sum((v - mean) ** 2 for v in ms) / len(ms)
+        return {
+            "target_hz": self.hz,
+            "measured_hz": round(1000.0 / mean, 1) if mean > 0 else 0.0,
+            "period_mean_ms": round(mean, 4),
+            "jitter_ms": round(var ** 0.5, 4),
+            "period_p99_ms": round(ms[min(len(ms) - 1, int(len(ms) * 0.99))], 4),
+            "period_max_ms": round(ms[-1], 4),
+            "step_time_ms": round(self.step_time_ms, 4),
+            # a cycle that took more than 1.5x its budget counts as a missed deadline
+            "deadline_misses": sum(1 for v in ms if v > target_ms * 1.5),
+            "samples": len(ms),
+        }
+
     def snapshot(self) -> Dict[str, Any]:
         """Full current state in SI units — the payload the UI polls/streams."""
         with self._lock:
             if self.robot is None or self.engine is None:
                 return {"robot_name": None, "sim_time": 0.0, "running": False, "paused": False}
             state = self.engine.state
+            loop = self.loop_stats()
             joints = []
             positions = self.robot.get_joint_positions()
             velocities = self.robot.get_joint_velocities()
@@ -579,7 +625,8 @@ class StaccRuntime:
                 "running": self._running,
                 "paused": self._paused,
                 "fps": round(self.fps, 1),
-                "jitter_ms": round(self.jitter_ms, 4),
+                "jitter_ms": loop["jitter_ms"],
+                "loop": loop,
                 "joints": joints,
                 "pose": pose,
                 "end_effector": self.end_effector_pose(),

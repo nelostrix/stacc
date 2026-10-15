@@ -16,6 +16,16 @@ import numpy as np
 from stacc.core.robot_base import Robot
 
 
+def _pose6(origin) -> list:
+    """Normalise a joint origin to [x, y, z, roll, pitch, yaw].
+
+    Joint.origin is documented as six values, but robots built in code often
+    give just a translation [x, y, z]; a missing rotation means "no rotation".
+    """
+    values = [float(v) for v in (origin or [])][:6]
+    return values + [0.0] * (6 - len(values))
+
+
 class ModelTranspiler:
     """Universal Bidirectional Robot Format Transpiler."""
 
@@ -131,7 +141,7 @@ class ModelTranspiler:
             ET.SubElement(j_elem, "parent", link=joint.parent_link or "")
             ET.SubElement(j_elem, "child", link=joint.child_link or "")
 
-            ox, oy, oz, rr, rp, ry = joint.origin
+            ox, oy, oz, rr, rp, ry = _pose6(joint.origin)
             ET.SubElement(j_elem, "origin", xyz=f"{ox} {oy} {oz}", rpy=f"{rr} {rp} {ry}")
             ax, ay, az = joint.axis
             ET.SubElement(j_elem, "axis", xyz=f"{ax} {ay} {az}")
@@ -234,7 +244,7 @@ class ModelTranspiler:
             ET.SubElement(j_elem, "parent").text = joint.parent_link or ""
             ET.SubElement(j_elem, "child").text = joint.child_link or ""
 
-            ox, oy, oz, rr, rp, ry = joint.origin
+            ox, oy, oz, rr, rp, ry = _pose6(joint.origin)
             ET.SubElement(j_elem, "pose").text = f"{ox} {oy} {oz} {rr} {rp} {ry}"
 
             axis_el = ET.SubElement(j_elem, "axis")

@@ -45,8 +45,14 @@ try:
     RT.start()
     STACC_SDK_AVAILABLE = True
     STACC_VERSION = getattr(stacc, "__version__", "0.3.0")
+    try:
+        import mujoco as _mujoco
+        MUJOCO_VERSION = getattr(_mujoco, "__version__", None)
+    except ImportError:
+        MUJOCO_VERSION = None
     PHYSICS_ENGINE = (
         f"stacc {STACC_VERSION} / {RT.engine._physics_backend.__class__.__name__}"
+        + (f" (MuJoCo {MUJOCO_VERSION})" if MUJOCO_VERSION else "")
     )
     print(f"[STACC-SERVER] Live SDK runtime active: robot={RT.robot.name}, "
           f"engine={RT.engine._physics_backend.__class__.__name__}, hz={RT.hz:g}")
@@ -54,7 +60,8 @@ except Exception as e:
     RT = None
     STACC_SDK_AVAILABLE = False
     STACC_VERSION = "0.3.0-fallback"
-    PHYSICS_ENGINE = "MuJoCo 3.2.0 PGS Solver"
+    MUJOCO_VERSION = None
+    PHYSICS_ENGINE = "analytic fallback kernel (no physics engine loaded)"
     print(f"[STACC-SERVER] SDK import failed ({e}); using analytic fallback kernel.")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -98,24 +105,31 @@ def _cbf_check(ee: Dict[str, float]) -> tuple:
     return margin_mm, margin_mm >= CBF_BARRIER_MARGIN_MM
 
 
-def _real_energy_and_jitter(runtime: Any) -> Dict[str, float]:
-    """Real MuJoCo system energy (kinetic + potential) and the wall-clock
-    time this one physics step actually took — not a sine-wave approximation
-    or a hardcoded constant.
-    """
-    t0 = time.perf_counter()
+def _real_energy(runtime: Any) -> float:
+    """Real MuJoCo system energy (kinetic + potential) in joules, or 0.0 when unavailable."""
     backend = getattr(runtime.engine, "_physics_backend", None)
-    energy_j = 0.0
-    if backend is not None and hasattr(backend, "model") and hasattr(backend, "data"):
-        try:
-            import mujoco
-            mujoco.mj_energyPos(backend.model, backend.data)
-            mujoco.mj_energyVel(backend.model, backend.data)
-            energy_j = float(backend.data.energy[0] + backend.data.energy[1])
-        except Exception:
-            energy_j = 0.0
-    step_time_ms = (time.perf_counter() - t0) * 1000.0
-    return {"energy_j": round(energy_j, 3), "step_time_ms": round(step_time_ms, 4)}
+    if backend is None or not (hasattr(backend, "model") and hasattr(backend, "data")):
+        return 0.0
+    try:
+        import mujoco
+        mujoco.mj_energyPos(backend.model, backend.data)
+        mujoco.mj_energyVel(backend.model, backend.data)
+        return round(float(backend.data.energy[0] + backend.data.energy[1]), 3)
+    except Exception:
+        return 0.0
+
+
+def _loop_timing() -> Dict[str, Any]:
+    """Measured timing of the live control loop (all zeros when no runtime is loaded)."""
+    if RT is None:
+        return {"target_hz": 0.0, "measured_hz": 0.0, "jitter_ms": 0.0, "step_time_ms": 0.0,
+                "period_p99_ms": 0.0, "period_max_ms": 0.0, "deadline_misses": 0, "samples": 0}
+    return RT.loop_stats()
+
+
+# The POSIX shared-memory ring buffer exists in stacc.hal.shm but nothing in this
+# daemon writes to it yet, so report that instead of a fake "locked" state.
+SHM_STATUS = "inactive"
 
 
 def _joint_world_offset(robot: Any, joint: Any, links_by_name: Dict[str, Any]) -> List[float]:
@@ -177,19 +191,21 @@ def live_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
     ee = _ee_xyz(RT)
     margin_mm, cbf_safe = _cbf_check(ee)
     torques = [round(float(t), 2) for t in RT.robot._state["joint_torques"]]
-    physics = _real_energy_and_jitter(RT)
+    loop = _loop_timing()
 
     return {
         "step": RT.engine.state.step,
         "dt": RT.config.timestep,
         "frequency_hz": round(1.0 / RT.config.timestep, 1),
+        "measured_hz": loop["measured_hz"],
+        "jitter_ms": loop["jitter_ms"],
         "end_effector": ee,
         "torques_nm": torques,
         "cbf_margin_mm": margin_mm,
         "cbf_safe": cbf_safe,
-        "shm_status": "LOCKED_RT_SYNC",
-        "energy_j": physics["energy_j"],
-        "step_time_ms": physics["step_time_ms"],
+        "shm_status": SHM_STATUS,
+        "energy_j": _real_energy(RT),
+        "step_time_ms": loop["step_time_ms"],
     }
 
 
@@ -347,7 +363,8 @@ def fallback_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
         "torques_nm": compute_rnea_gravity_torques(joints),
         "cbf_margin_mm": margin_mm,
         "cbf_safe": cbf_safe,
-        "shm_status": "LOCKED_RT_SYNC",
+        "shm_status": SHM_STATUS,
+        "engine": "analytic_fallback",
         # No physics engine in this analytic fallback to derive real energy
         # from — 0.0 is the honest "not available" value here, not a guess.
         "energy_j": 0.0,
@@ -392,26 +409,71 @@ def fallback_tune_gains(req: Dict[str, Any]) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local-only request guard
+#
+# This server binds to 127.0.0.1, but a browser will still let ANY web page the
+# user visits fire requests at it (and a rebinding attacker can point their own
+# hostname at 127.0.0.1). So requests are accepted only when:
+#   * the Host header names a loopback host (blocks DNS rebinding), and
+#   * any Origin header is NELO Studio's own origin.
+# Requests without an Origin header (the Next.js server, Electron's main
+# process, other local daemons, curl) are unaffected — browsers always send one.
+# ─────────────────────────────────────────────────────────────────────────────
+_STUDIO_PORT = os.environ.get("NELO_STUDIO_PORT", "3000")
+ALLOWED_ORIGINS = {
+    o.strip()
+    for o in os.environ.get(
+        "NELO_ALLOWED_ORIGINS",
+        f"http://127.0.0.1:{_STUDIO_PORT},http://localhost:{_STUDIO_PORT}",
+    ).split(",")
+    if o.strip()
+}
+LOOPBACK_HOSTNAMES = {"127.0.0.1", "localhost", "[::1]"}
+
+
 class STACCRequestHandler(BaseHTTPRequestHandler):
+    def _cors_origin(self):
+        origin = self.headers.get("Origin")
+        return origin if origin in ALLOWED_ORIGINS else None
+
+    def _cors_headers(self):
+        origin = self._cors_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+    def _guard(self) -> bool:
+        """Reject cross-origin / DNS-rebinding requests before any handler runs."""
+        hostname = (self.headers.get("Host") or "").rsplit(":", 1)[0].lower()
+        origin = self.headers.get("Origin")
+        if hostname not in LOOPBACK_HOSTNAMES or (origin is not None and origin not in ALLOWED_ORIGINS):
+            self._send_json(403, {"error": "Forbidden: request origin is not allowed"})
+            return False
+        return True
+
     def _send_json(self, status: int, data: Any):
         payload = json.dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self._cors_headers()
         self.end_headers()
         self.wfile.write(payload)
 
     def do_OPTIONS(self):
+        if not self._guard():
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self._cors_headers()
         self.end_headers()
 
     def do_GET(self):
+        if not self._guard():
+            return
         if self.path == "/v1/system/status" or self.path == "/health":
             total_steps = (RT.engine.state.step if RT is not None else SIMULATION_STEPS)
             self._send_json(200, {
@@ -419,10 +481,14 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
                 "platform": "STACC Universal Robotics Platform",
                 "version": STACC_VERSION,
                 "sdk_available": STACC_SDK_AVAILABLE,
-                "control_loop_hz": (round(1.0 / RT.config.timestep, 1) if RT else 1000),
+                "control_loop_hz": (round(1.0 / RT.config.timestep, 1) if RT else None),
                 "physics_engine": PHYSICS_ENGINE,
+                "mujoco_version": MUJOCO_VERSION,
+                "live_runtime": RT is not None,
+                "loop": _loop_timing(),
                 "cbf_barrier_margin_mm": CBF_BARRIER_MARGIN_MM,
-                "shm_ringbuffer_slots": 10000,
+                "shm_status": SHM_STATUS,
+                "shm_ringbuffer_slots": 0,
                 "active_robot_model": (RT.robot.name if RT else "Atlas-07 6-DOF Anthropomorphic Arm"),
                 "total_sim_steps": total_steps,
                 "uptime_seconds": int(time.time() - START_TIME),
@@ -452,6 +518,8 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Endpoint not found"})
 
     def do_POST(self):
+        if not self._guard():
+            return
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode("utf-8")
         req_data = json.loads(body) if body else {}
