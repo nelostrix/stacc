@@ -610,7 +610,7 @@ def rss_examples() -> Dict[str, Any]:
 RUNTIME_API_VERSION = 1
 
 
-def _runtime_or_error() -> "tuple[Any, Dict[str, Any] | None]":
+def _runtime_required() -> "tuple[Any, Dict[str, Any] | None]":
     """Return (RT, None) when a live runtime with a robot exists, else (None, error)."""
     if RT is None or RT.robot is None:
         return None, {"error": "Live runtime unavailable — no robot loaded", "kind": "runtime"}
@@ -974,6 +974,28 @@ ALLOWED_ORIGINS = {
     if o.strip()
 }
 LOOPBACK_HOSTNAMES = {"127.0.0.1", "localhost", "[::1]"}
+
+# Controller runtime API (/v1/runtime/*) dispatch tables. GET handlers take no
+# arguments; POST handlers receive the parsed JSON body.
+RUNTIME_GET = {
+    "/v1/runtime/capabilities": runtime_capabilities,
+    "/v1/runtime/joints": runtime_joints,
+    "/v1/runtime/sensors": runtime_sensors,
+    "/v1/runtime/telemetry": runtime_telemetry,
+}
+RUNTIME_POST = {
+    "/v1/runtime/load_project": runtime_load_project,
+    "/v1/runtime/start": lambda req=None: runtime_start(),
+    "/v1/runtime/pause": lambda req=None: runtime_pause(),
+    "/v1/runtime/resume": lambda req=None: runtime_resume(),
+    "/v1/runtime/reset": lambda req=None: runtime_reset(),
+    "/v1/runtime/step": runtime_step,
+    "/v1/runtime/speed": runtime_speed,
+    "/v1/runtime/joints/command": runtime_joint_command,
+    "/v1/runtime/control/gains": runtime_control_gains,
+    "/v1/runtime/stop": lambda req=None: runtime_stop(),
+    "/v1/runtime/kill": lambda req=None: runtime_kill(),
+}
 
 
 class STACCRequestHandler(BaseHTTPRequestHandler):
