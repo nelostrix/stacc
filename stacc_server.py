@@ -12,8 +12,10 @@ kernel (same response shapes) so the UI never gets a dead endpoint.
 import os
 import sys
 import json
+import re
 import time
 import math
+import hashlib
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict, List
@@ -595,6 +597,262 @@ def rss_examples() -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Controller runtime API — /v1/runtime/* (spec §4)
+#
+# A STABLE, versioned surface that every controller language binds to (Python
+# today, C++ over the same JSON contract). It is a thin HTTP mapping over the
+# existing StaccRuntime — no new physics code. Units at THIS surface are SI
+# (radian, second, Nm, metre), unlike the legacy /v1/robot/* routes which keep
+# degrees; the runtime API never mixes units. Errors: 503 when no live runtime
+# is loaded, 400 for bad input.
+# ─────────────────────────────────────────────────────────────────────────────
+
+RUNTIME_API_VERSION = 1
+
+
+def _runtime_or_error() -> "tuple[Any, Dict[str, Any] | None]":
+    """Return (RT, None) when a live runtime with a robot exists, else (None, error)."""
+    if RT is None or RT.robot is None:
+        return None, {"error": "Live runtime unavailable — no robot loaded", "kind": "runtime"}
+    return RT, None
+
+
+def _state_hash(rt: Any) -> str:
+    """A stable fingerprint of the joint state after a step.
+
+    Not MuJoCo's internal digest — a hash over the rounded joint positions and
+    velocities, enough for a controller to assert "the state changed / did not
+    change" across a step. Deterministic for identical state on the same build.
+    """
+    positions = rt.robot.get_joint_positions()
+    velocities = rt.robot.get_joint_velocities()
+    payload = ",".join(f"{v:.9f}" for v in list(positions) + list(velocities))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def runtime_capabilities() -> Dict[str, Any]:
+    """Engine + API capability declaration a controller checks on load."""
+    if RT is None:
+        return {"error": "Live runtime unavailable", "kind": "runtime"}
+    backend = getattr(RT.engine, "_physics_backend", None)
+    caps = backend.capabilities() if backend is not None and hasattr(backend, "capabilities") else {}
+    joints = RT.joint_info()
+    sensors = [s.name for s in RT.robot.sensors] if RT.robot is not None else []
+    return {
+        "engine": RT.config.physics_engine,
+        "engine_version": MUJOCO_VERSION,
+        "api_version": RUNTIME_API_VERSION,
+        "units": "SI",
+        # MuJoCo's solver is deterministic for identical state on the same build;
+        # we only claim it for that engine rather than guessing for fallbacks.
+        "deterministic_same_machine": RT.config.physics_engine == "mujoco",
+        "joints": len(joints),
+        "actuators": len(joints),
+        "sensors": sensors,
+        "snapshot": bool(caps.get("snapshot", False)),
+        "render": not RT.config.headless,
+        "operations": [
+            "load_project", "start", "pause", "resume", "reset", "step", "speed",
+            "joints", "joints/command", "control/gains", "sensors", "telemetry", "stop", "kill",
+        ],
+    }
+
+
+def runtime_load_project(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Load a project (rss/urdf/sdf) into the live runtime, replacing any current robot."""
+    if RT is None:
+        return {"error": "Live runtime unavailable", "kind": "runtime"}
+    fmt = (req.get("format") or "rss").lower()
+    try:
+        robot = _robot_from_source(fmt, req.get("source", ""))
+    except ValueError as e:
+        return {"error": str(e), "kind": "parse"}
+    try:
+        RT.set_robot(robot)
+        RT.set_joint_positions([0.0] * robot.dof)
+        RT.start()
+    except Exception as e:
+        return {"error": f"The runtime could not load this project: {e}", "kind": "load"}
+    return {
+        "ok": True,
+        "robot": {"name": robot.name, "dof": robot.dof, "joints": RT.joint_info()},
+        "preserved_state": False,
+    }
+
+
+def runtime_start() -> Dict[str, Any]:
+    rt, err = _runtime_required()
+    if err is not None:
+        return err
+    rt.start()
+    return {"running": True, "paused": rt.paused, "sim_time": rt.snapshot().get("sim_time", 0.0)}
+
+
+def runtime_pause() -> Dict[str, Any]:
+    rt, err = _runtime_required()
+    if err is not None:
+        return err
+    rt.pause()
+    snap = rt.snapshot()
+    return {"paused": True, "sim_time": snap.get("sim_time", 0.0), "step": snap.get("step", 0)}
+
+
+def runtime_resume() -> Dict[str, Any]:
+    rt, err = _runtime_required()
+    if err is not None:
+        return err
+    rt.resume()
+    return {"paused": rt.paused}
+
+
+def runtime_reset() -> Dict[str, Any]:
+    rt, err = _runtime_required()
+    if err is not None:
+        return err
+    rt.reset()
+    snap = rt.snapshot()
+    return {"sim_time": snap.get("sim_time", 0.0), "step": snap.get("step", 0)}
+
+
+def runtime_step(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Advance `count` physics timesteps (works while paused or stopped)."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    try:
+        count = int(req.get("count", 1))
+    except (TypeError, ValueError):
+        return {"error": "count must be an integer", "kind": "input"}
+    if count < 0 or count > 1_000_000:
+        return {"error": "count must be between 0 and 1000000", "kind": "input"}
+    for _ in range(count):
+        rt.step_once()
+    snap = RT.snapshot()
+    return {"step": snap.get("step", 0), "sim_time": snap.get("sim_time", 0.0),
+            "state_hash": _state_hash(RT)}
+
+
+def runtime_speed(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Retune the loop rate. `hz` sets the loop directly; `realtime_factor` scales it.
+
+    Real time corresponds to `hz * timestep == 1`; a factor of 2 runs the loop at
+    twice the physics timestep rate (two substeps per cycle), so simulation time
+    advances twice as fast as wall time. Restarting the loop is the only way to
+    change hz, because the loop's period and substep count are captured at thread
+    start.
+    """
+    rt, err = _runtime_required()
+    if err:
+        return err
+    timestep = rt.config.timestep
+    if "hz" in req and req["hz"] is not None:
+        hz = float(req["hz"])
+    elif "realtime_factor" in req and req["realtime_factor"] is not None:
+        hz = float(req["realtime_factor"]) / max(timestep, 1e-9)
+    else:
+        return {"error": "Provide 'hz' or 'realtime_factor'", "kind": "input"}
+    if not (0.0 < hz <= 100000.0):
+        return {"error": f"hz out of range: {hz}", "kind": "input"}
+    was_running = rt.running
+    if was_running:
+        rt.stop()
+    rt.hz = hz
+    if was_running:
+        rt.start()
+    return {"hz": rt.hz, "realtime_factor": round(rt.hz * timestep, 6)}
+
+
+def runtime_joints() -> Dict[str, Any]:
+    """Per-joint limits/effort merged with live position/velocity/torque/command."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    info = rt.joint_info()
+    live = {j["id"]: j for j in rt.snapshot().get("joints", [])}
+    keys = ("position", "velocity", "torque", "command_position")
+    joints = []
+    for j in info:
+        merged = dict(j)
+        src = live.get(j["id"], {})
+        for k in keys:
+            merged[k] = src.get(k)
+        joints.append(merged)
+    return {"joints": joints}
+
+
+def runtime_joint_command(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Command joints by position (all), by one named joint, or by torque."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    try:
+        if req.get("torques") is not None:
+            rt.set_joint_torques([float(t) for t in req["torques"]])
+        elif req.get("joint") is not None and req.get("angle_rad") is not None:
+            rt.set_joint_angle(str(req["joint"]), float(req["angle_rad"]))
+        elif req.get("positions") is not None:
+            rt.set_joint_positions([float(p) for p in req["positions"]])
+        else:
+            return {
+                "error": "Provide {positions:[rad]}, {joint,angle_rad} or {torques:[Nm]}",
+                "kind": "input",
+            }
+    except (ValueError, RuntimeError) as e:
+        return {"error": str(e), "kind": "input"}
+    return {"command_positions": rt.snapshot().get("command_positions")}
+
+
+def runtime_control_gains(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Read or set the servo gains (JointImpedance mode)."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    rt.set_gains(kp=req.get("kp"), kd=req.get("kd"), gravity_comp=req.get("gravity_comp"))
+    return {
+        "mode": rt.control_mode,
+        "kp": rt.kp,
+        "kd": rt.kd,
+        "gravity_comp": rt.gravity_comp,
+    }
+
+
+def runtime_sensors() -> Dict[str, Any]:
+    """Latest JSON-safe reading of every attached sensor (images stripped)."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    from stacc.server.runtime import _sensor_readout
+
+    return {"sensors": _sensor_readout(rt.robot)}
+
+
+def runtime_telemetry() -> Dict[str, Any]:
+    """Full measured runtime snapshot (the same payload /v1/* telemetry uses)."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    return rt.snapshot()
+
+
+def runtime_stop() -> Dict[str, Any]:
+    """Graceful stop; the robot stays loaded and can start again."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    rt.stop()
+    return {"running": rt.running}
+
+
+def runtime_kill() -> Dict[str, Any]:
+    """Force stop and unload the robot; the daemon stays up."""
+    if RT is None:
+        return {"error": "Live runtime unavailable", "kind": "runtime"}
+    RT.stop()
+    RT.set_robot(None)
+    return {"killed": True, "running": False}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Analytic fallback (same response shapes, no SDK)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -799,6 +1057,9 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(200, rss_examples())
             else:
                 self._send_json(503, {"error": "Live SDK runtime unavailable — cannot read RSS examples"})
+        elif self.path in RUNTIME_GET:
+            result = RUNTIME_GET[self.path]()
+            self._send_json(503 if "error" in result else 200, result)
         else:
             self._send_json(404, {"error": "Endpoint not found"})
 
@@ -821,23 +1082,35 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
             result = live_tune_gains(req_data) if RT else fallback_tune_gains(req_data)
             self._send_json(200, result)
 
-        elif self.path in ("/v1/model/inspect", "/v1/model/convert", "/v1/robot/load_model", "/v1/rss/bom", "/v1/rss/ros2_package"):
+        elif self.path in ("/v1/model/inspect", "/v1/model/convert", "/v1/robot/load_model", "/v1/rss/bom", "/v1/rss/ros2_package", "/v1/rss/compile"):
             handler = {
                 "/v1/model/inspect": model_inspect,
                 "/v1/model/convert": model_convert,
                 "/v1/robot/load_model": robot_load_model,
                 "/v1/rss/bom": rss_bom,
                 "/v1/rss/ros2_package": rss_ros2_package,
+                "/v1/rss/compile": rss_compile,
             }[self.path]
             result = handler(req_data)
             self._send_json(400 if "error" in result else 200, result)
 
         elif self.path == "/v1/rss/load":
             if RT is None:
-                self._send_json(503, {"error": "Live SDK runtime unavailable — cannot compile RSS"})
-                return
-            result = rss_load(req_data)
-            self._send_json(400 if "error" in result else 200, result)
+                self._send_json(503, {"error": "Live SDK runtime unavailable — cannot load RSS"})
+            else:
+                result = rss_load(req_data)
+                self._send_json(400 if "error" in result else 200, result)
+
+        elif self.path in RUNTIME_POST:
+            handler = RUNTIME_POST[self.path]
+            try:
+                result = handler(req_data)
+            except Exception as e:  # never let a controller call 500 the daemon silently
+                result = {"error": str(e) or e.__class__.__name__, "kind": "runtime"}
+            status = 200
+            if "error" in result:
+                status = 503 if result.get("kind") == "runtime" else 400
+            self._send_json(status, result)
 
         else:
             self._send_json(404, {"error": "Endpoint not found"})

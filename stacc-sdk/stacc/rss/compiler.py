@@ -358,12 +358,31 @@ def _block_to_geometry(block: Block, default_length: Optional[float] = None) -> 
     return geometry
 
 
+def _inertia_for_geometry(mass: float, geometry: Geometry) -> Inertia:
+    """Solid-body inertia derived from the link's own geometry.
+
+    AC4 (docs/PLATFORM_SPEC.md §9): a dimension edit must move the mass
+    properties, not just the drawn mesh — so the tensor is derived from the
+    geometry we just built rather than a fixed 0.1 m placeholder cube (which
+    made every link's inertia independent of its actual size).
+    """
+    if geometry.shape == "cylinder":
+        return Inertia.from_cylinder(mass, float(geometry.radius), float(geometry.length))
+    if geometry.shape == "sphere":
+        return Inertia.from_sphere(mass, float(geometry.radius))
+    if geometry.shape == "mesh":
+        scale = geometry.mesh_scale or [0.1, 0.1, 0.1]
+        return Inertia.from_box(mass, float(scale[0]), float(scale[1]), float(scale[2]))
+    size = geometry.size or [0.1, 0.1, 0.1]
+    return Inertia.from_box(mass, float(size[0]), float(size[1]), float(size[2]))
+
+
 def _block_to_link(block: Block, name: str, default_length: Optional[float] = None) -> Link:
     mass = _prop(block, "mass", 1.0)
     if not isinstance(mass, (int, float)):
         mass = 1.0
     geometry = _block_to_geometry(block, default_length=default_length)
-    inertia = Inertia.from_box(float(mass), 0.1, 0.1, 0.1)
+    inertia = _inertia_for_geometry(float(mass), geometry)
     return Link(name=name, mass=float(mass), inertia=inertia, visual=geometry, collision=geometry)
 
 
