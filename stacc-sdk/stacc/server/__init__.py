@@ -36,6 +36,7 @@ from stacc.server.runtime import (
 )
 from stacc.server.http_bridge import run_stacc_server, build_runtime, legacy_state
 from stacc.server.fastapi_bridge import create_app, serve as serve_fastapi
+from stacc.server.runtime_client import RuntimeClient, RuntimeApiError
 
 __all__ = [
     "StaccRuntime",
@@ -47,6 +48,8 @@ __all__ = [
     "legacy_state",
     "create_app",
     "serve_fastapi",
+    "RuntimeClient",
+    "RuntimeApiError",
 ]
 
 
