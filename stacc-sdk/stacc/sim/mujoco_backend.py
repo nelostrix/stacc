@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import mujoco
+import numpy as np
+import mujoco
 import mujoco.viewer
 
 from stacc.sim.backend import PhysicsBackend, register_backend
@@ -31,7 +33,7 @@ class MuJoCoBackend(PhysicsBackend):
     def is_available(cls) -> bool:
         try:
             import mujoco  # noqa: F401
-
+            import numpy as np  # noqa: F401
             return True
         except ImportError:
             return False
@@ -111,6 +113,57 @@ class MuJoCoBackend(PhysicsBackend):
         if self.viewer:
             self.viewer.close()
             self.viewer = None
+
+    def capabilities(self) -> Dict[str, bool]:
+        """SimEngine capability declaration conforming to Phase 4 Step 4.5."""
+        return {
+            "step": True,
+            "reset": True,
+            "snapshot": True,
+            "restore": True,
+            "read_state": True,
+            "write_controls": True,
+            "real_time_loop": True,
+        }
+
+    def snapshot(self) -> bytes:
+        """Capture bit-identical MuJoCo state snapshot using mj_getState."""
+        spec = mujoco.mjtState.mjSTATE_FULLPHYSICS
+        sz = mujoco.mj_stateSize(self.model, spec)
+        buf = np.zeros(sz, dtype=np.float64)
+        mujoco.mj_getState(self.model, self.data, buf, spec)
+        return buf.tobytes()
+
+    def restore(self, snapshot_bytes: bytes) -> None:
+        """Restore bit-identical MuJoCo state from binary snapshot using mj_setState."""
+        spec = mujoco.mjtState.mjSTATE_FULLPHYSICS
+        sz = mujoco.mj_stateSize(self.model, spec)
+        buf = np.frombuffer(snapshot_bytes, dtype=np.float64)
+        if len(buf) != sz:
+            raise ValueError(f"Snapshot size mismatch: expected {sz} floats, got {len(buf)}")
+        mujoco.mj_setState(self.model, self.data, buf, spec)
+        mujoco.mj_forward(self.model, self.data)
+
+    def read_state(self) -> Dict[str, Any]:
+        """Read high-resolution engine state vectors."""
+        return {
+            "time": float(self.data.time),
+            "step_count": self._step_count,
+            "qpos": self.data.qpos.copy().tolist(),
+            "qvel": self.data.qvel.copy().tolist(),
+        }
+
+    def write_controls(self, controls: Any) -> None:
+        """Write motor/actuator controls to MuJoCo data.ctrl."""
+        if isinstance(controls, (list, tuple)):
+            for i, val in enumerate(controls):
+                if i < self.model.nu:
+                    self.data.ctrl[i] = float(val)
+        elif isinstance(controls, dict):
+            for k, val in controls.items():
+                idx = int(k)
+                if idx < self.model.nu:
+                    self.data.ctrl[idx] = float(val)
 
     def __repr__(self) -> str:
         return (

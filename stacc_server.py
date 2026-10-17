@@ -270,6 +270,184 @@ def live_tune_gains(req: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Model files (URDF / SDF / RSS) — used by the Studio's file-explorer actions.
+# The Studio reads the file and sends its text; this daemon never opens arbitrary paths.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _robot_from_source(fmt: str, source: str) -> Any:
+    """Parse a model file's text into a stacc Robot. Raises ValueError with a readable message."""
+    fmt = (fmt or "").lower().lstrip(".")
+    try:
+        if fmt in ("urdf", "xml"):
+            from stacc.core.urdf_parser import load_urdf_string
+            return load_urdf_string(source)
+        if fmt == "sdf":
+            import tempfile
+            from stacc.core.urdf_parser import load_sdf
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "model.sdf")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(source)
+                return load_sdf(path)
+        if fmt == "rss":
+            from stacc.rss import compile_document, parse
+            return compile_document(parse(source), search_paths=[EXAMPLES_DIR])
+    except Exception as e:  # parser/compiler errors carry useful text
+        raise ValueError(str(e) or e.__class__.__name__) from e
+    raise ValueError(f"Unsupported model format '{fmt}' (expected urdf, sdf or rss).")
+
+
+def model_inspect(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse a model and report its structure plus real validation findings."""
+    if not STACC_SDK_AVAILABLE:
+        return {"error": "The stacc SDK is not available in this daemon."}
+    try:
+        robot = _robot_from_source(req.get("format", ""), req.get("source", ""))
+    except ValueError as e:
+        return {"error": str(e), "kind": "parse"}
+
+    from stacc.converters.urdf_mjcf_usd import ModelTranspiler
+
+    findings: List[Dict[str, str]] = []
+    link_names = [l.name for l in robot.links]
+    if len(set(link_names)) != len(link_names):
+        findings.append({"level": "error", "message": "Duplicate link names."})
+    joint_names = [j.name for j in robot.joints]
+    if len(set(joint_names)) != len(joint_names):
+        findings.append({"level": "error", "message": "Duplicate joint names."})
+
+    known = set(link_names)
+    children = set()
+    for j in robot.joints:
+        for end, label in ((j.parent_link, "parent"), (j.child_link, "child")):
+            if end not in known:
+                findings.append({"level": "error", "message": f"Joint '{j.name}' references unknown {label} link '{end}'."})
+        children.add(j.child_link)
+        if j.type in ("revolute", "prismatic") and j.limits[0] >= j.limits[1]:
+            findings.append({"level": "warning", "message": f"Joint '{j.name}' has lower limit >= upper limit."})
+    roots = [n for n in link_names if n not in children]
+    if len(roots) > 1:
+        findings.append({"level": "warning", "message": f"{len(roots)} root links ({', '.join(roots[:4])}) — the model is not a single tree."})
+
+    total_mass = 0.0
+    for l in robot.links:
+        total_mass += float(l.mass or 0.0)
+        if not l.mass or l.mass <= 0:
+            findings.append({"level": "warning", "message": f"Link '{l.name}' has no mass (a dynamic simulation needs mass > 0)."})
+            continue
+        i = l.inertia
+        ok, why = ModelTranspiler.validate_inertia_tensor(l.mass, i.ixx, i.iyy, i.izz)
+        if not ok:
+            findings.append({"level": "warning", "message": f"Link '{l.name}' inertia: {why}"})
+
+    return {
+        "name": robot.name,
+        "format": (req.get("format") or "").lstrip("."),
+        "dof": robot.dof,
+        "link_count": len(robot.links),
+        "joint_count": len(robot.joints),
+        "root_links": roots,
+        "total_mass_kg": round(total_mass, 4),
+        "joints": [
+            {
+                "name": j.name, "type": j.type, "parent": j.parent_link, "child": j.child_link,
+                "lower": None if j.limits[0] == float("-inf") else round(float(j.limits[0]), 4),
+                "upper": None if j.limits[1] == float("inf") else round(float(j.limits[1]), 4),
+                "effort": j.max_effort, "velocity": j.max_velocity,
+            }
+            for j in robot.joints
+        ],
+        "findings": findings,
+    }
+
+
+def model_convert(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a model to URDF, SDF or MJCF text."""
+    if not STACC_SDK_AVAILABLE:
+        return {"error": "The stacc SDK is not available in this daemon."}
+    target = (req.get("to") or "").lower()
+    try:
+        robot = _robot_from_source(req.get("format", ""), req.get("source", ""))
+    except ValueError as e:
+        return {"error": str(e), "kind": "parse"}
+    try:
+        from stacc.converters.urdf_mjcf_usd import ModelTranspiler
+        if target == "urdf":
+            text = ModelTranspiler.robot_to_urdf(robot)
+        elif target == "sdf":
+            text = ModelTranspiler.robot_to_sdf(robot)
+        elif target == "mjcf":
+            from stacc.sim.engine import SimulationConfig
+            from stacc.sim.mjcf_builder import robot_to_mjcf
+            text = robot_to_mjcf(robot, SimulationConfig(duration=1.0, timestep=0.001, headless=True, physics_engine="mujoco"))
+        else:
+            return {"error": f"Unsupported target format '{target}' (expected urdf, sdf or mjcf)."}
+    except Exception as e:
+        return {"error": f"Conversion failed: {e}", "kind": "convert"}
+    return {"name": robot.name, "to": target, "text": text}
+
+
+def robot_load_model(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Hot-swap a parsed model into the live simulation runtime."""
+    if RT is None:
+        return {"error": "Live SDK runtime unavailable — cannot load a model into the simulator."}
+    try:
+        robot = _robot_from_source(req.get("format", ""), req.get("source", ""))
+    except ValueError as e:
+        return {"error": str(e), "kind": "parse"}
+    try:
+        RT.set_robot(robot)
+        RT.set_joint_positions([0.0] * robot.dof)
+        RT.start()
+        return {"robot": serialize_robot(robot)}
+    except Exception as e:
+        return {"error": f"The simulator could not load this model: {e}", "kind": "load"}
+
+
+def rss_bom(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Bill of materials for an .rss robot, as the files the SDK writes (CSV etc.)."""
+    if not STACC_SDK_AVAILABLE:
+        return {"error": "The stacc SDK is not available in this daemon."}
+    try:
+        robot = _robot_from_source("rss", req.get("source", ""))
+    except ValueError as e:
+        return {"error": str(e), "kind": "parse"}
+    import tempfile
+    from stacc.rss.bom import write_bom
+    with tempfile.TemporaryDirectory() as tmp:
+        written = write_bom(robot, tmp)
+        files = {}
+        for name, path in written.items():
+            with open(path, "r", encoding="utf-8") as fh:
+                files[os.path.basename(path)] = fh.read()
+    return {"name": robot.name, "files": files}
+
+
+def rss_ros2_package(req: Dict[str, Any]) -> Dict[str, Any]:
+    """A ROS 2 package skeleton (package.xml, URDF, launch, controllers) for an .rss robot."""
+    if not STACC_SDK_AVAILABLE:
+        return {"error": "The stacc SDK is not available in this daemon."}
+    try:
+        robot = _robot_from_source("rss", req.get("source", ""))
+    except ValueError as e:
+        return {"error": str(e), "kind": "parse"}
+    import tempfile
+    from pathlib import Path
+    from stacc.converters.urdf_mjcf_usd import ModelTranspiler
+    from stacc.rss.ros2_skeleton import write_ros2_package
+    with tempfile.TemporaryDirectory() as tmp:
+        pkg_dir = Path(write_ros2_package(robot, ModelTranspiler.robot_to_urdf(robot), Path(tmp)))
+        files = {}
+        for f in sorted(pkg_dir.rglob("*")):
+            if f.is_file():
+                try:
+                    files[str(f.relative_to(pkg_dir))] = f.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+    return {"name": robot.name, "package": pkg_dir.name, "files": files}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # RSS — load a user-designed robot into the live daemon (NELO-Studio Robot
 # Designer). Requires the real SDK; there is no meaningful analytic fallback
 # for "compile arbitrary robot geometry", so these 404 honestly when RT is None
@@ -279,23 +457,130 @@ def live_tune_gains(req: Dict[str, Any]) -> Dict[str, Any]:
 EXAMPLES_DIR = os.path.join(SDK_PATH, "examples")
 
 
+def _rss_error_diagnostics(exc: Exception) -> List[Dict[str, Any]]:
+    """Structured diagnostics for a failed RSS compile (see docs/RSS_LANGUAGE_SPEC.md §6).
+
+    One shape for every failure so the editor, CLI and any future tooling read
+    the same fields instead of string-matching error text.
+    """
+    from stacc.rss import RSSCompileError, RSSSyntaxError
+
+    if isinstance(exc, RSSSyntaxError):
+        return [{
+            "severity": "error",
+            "code": "RSS-SYNTAX",
+            "message": exc.message,
+            "line": exc.line,
+            "col": exc.col,
+            "source_line": getattr(exc, "source_line", "") or "",
+        }]
+    if isinstance(exc, RSSCompileError):
+        return [{
+            "severity": "error",
+            "code": "RSS-COMPILE",
+            "message": str(exc),
+            "line": getattr(exc, "line", None),
+            "col": getattr(exc, "col", None),
+        }]
+    return [{
+        "severity": "error",
+        "code": "RSS-ERROR",
+        "message": str(exc) or exc.__class__.__name__,
+        "line": None,
+        "col": None,
+    }]
+
+
+def _rss_warning_diagnostics(robot: Any) -> List[Dict[str, Any]]:
+    """Compile warnings (unrecognized blocks/properties) as structured diagnostics."""
+    out: List[Dict[str, Any]] = []
+    for w in getattr(robot, "rss_warnings", []) or []:
+        text = w if isinstance(w, str) else str(w)
+        line, col = None, None
+        # Warnings are plain strings today; lift "line N" hints when present so
+        # the editor can still underline them.
+        m = re.search(r"line\s+(\d+)", text)
+        if m:
+            line = int(m.group(1))
+        out.append({
+            "severity": "warning",
+            "code": "RSS-WARNING",
+            "message": text,
+            "line": line,
+            "col": col,
+        })
+    return out
+
+
+def _compile_rss(source: str) -> Any:
+    """Parse + compile RSS source into a stacc Robot. Raises on any failure."""
+    from stacc.rss import compile_document, parse
+
+    doc = parse(source)
+    return compile_document(doc, search_paths=[EXAMPLES_DIR])
+
+
+def rss_compile(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate + compile an .rss document WITHOUT touching the live runtime.
+
+    The editor's live loop calls this while typing; only a successful compile is
+    then hot-swapped through /v1/rss/load, so a half-written file never disturbs
+    the running simulation. Returns the same structure shape as rss_load plus
+    `diagnostics`.
+    """
+    if not STACC_SDK_AVAILABLE:
+        return {"error": "The stacc SDK is not available in this daemon."}
+
+    source = req.get("source", "")
+    if not source.strip():
+        return {
+            "error": "source (.rss text) is required",
+            "kind": "input",
+            "diagnostics": [{
+                "severity": "error",
+                "code": "RSS-INPUT",
+                "message": "source (.rss text) is required",
+            }],
+        }
+    try:
+        robot = _compile_rss(source)
+    except Exception as e:  # syntax/compile errors carry line/col where available
+        result = {"error": str(e), "kind": "compile" if "compile" in e.__class__.__name__.lower() else "syntax"}
+        from stacc.rss import RSSSyntaxError
+
+        if isinstance(e, RSSSyntaxError):
+            result.update({"error": e.message, "line": e.line, "col": e.col, "kind": "syntax"})
+        result["diagnostics"] = _rss_error_diagnostics(e)
+        return result
+
+    return {
+        "robot": serialize_robot(robot),
+        "diagnostics": _rss_warning_diagnostics(robot),
+    }
+
+
 def rss_load(req: Dict[str, Any]) -> Dict[str, Any]:
     """Parse + compile an .rss document and hot-swap it into the live runtime."""
-    from stacc.rss import RSSCompileError, RSSSyntaxError, compile_document, parse
+    from stacc.rss import RSSSyntaxError
 
     source = req.get("source", "")
     try:
-        doc = parse(source)
-        robot = compile_document(doc, search_paths=[EXAMPLES_DIR])
+        robot = _compile_rss(source)
     except RSSSyntaxError as e:
-        return {"error": e.message, "line": e.line, "col": e.col, "kind": "syntax"}
-    except RSSCompileError as e:
-        return {"error": str(e), "kind": "compile"}
+        return {
+            "error": e.message, "line": e.line, "col": e.col, "kind": "syntax",
+            "diagnostics": _rss_error_diagnostics(e),
+        }
+    except Exception as e:
+        return {
+            "error": str(e), "kind": "compile",
+            "diagnostics": _rss_error_diagnostics(e),
+        }
 
     RT.set_robot(robot)
     RT.set_joint_positions([0.0] * robot.dof)
     RT.start()
-    return {"robot": serialize_robot(robot)}
+    return {"robot": serialize_robot(robot), "diagnostics": _rss_warning_diagnostics(robot)}
 
 
 def rss_examples() -> Dict[str, Any]:
@@ -535,6 +820,17 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
         elif self.path == "/v1/robot/tune_gains":
             result = live_tune_gains(req_data) if RT else fallback_tune_gains(req_data)
             self._send_json(200, result)
+
+        elif self.path in ("/v1/model/inspect", "/v1/model/convert", "/v1/robot/load_model", "/v1/rss/bom", "/v1/rss/ros2_package"):
+            handler = {
+                "/v1/model/inspect": model_inspect,
+                "/v1/model/convert": model_convert,
+                "/v1/robot/load_model": robot_load_model,
+                "/v1/rss/bom": rss_bom,
+                "/v1/rss/ros2_package": rss_ros2_package,
+            }[self.path]
+            result = handler(req_data)
+            self._send_json(400 if "error" in result else 200, result)
 
         elif self.path == "/v1/rss/load":
             if RT is None:

@@ -22,7 +22,7 @@ SimulationEngine picks it up with zero changes to engine.py.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Dict, Type
+from typing import TYPE_CHECKING, Dict, Type, Any
 
 if TYPE_CHECKING:
     from stacc.core.robot_base import Robot
@@ -55,6 +55,33 @@ class PhysicsBackend(ABC):
 
     def reset(self) -> None:
         """Reset backend state. No-op by default."""
+
+    def capabilities(self) -> Dict[str, bool]:
+        """Declared engine capabilities for feature negotiation."""
+        return {
+            "step": True,
+            "reset": True,
+            "snapshot": False,
+            "restore": False,
+            "read_state": False,
+            "write_controls": False,
+        }
+
+    def snapshot(self) -> bytes:
+        """Capture opaque bit-identical state snapshot."""
+        raise NotImplementedError("Snapshot not supported by this backend")
+
+    def restore(self, snapshot_bytes: bytes) -> None:
+        """Restore backend state from an opaque snapshot."""
+        raise NotImplementedError("Restore not supported by this backend")
+
+    def read_state(self) -> Dict[str, Any]:
+        """Read engine-level state representation."""
+        raise NotImplementedError("read_state not supported by this backend")
+
+    def write_controls(self, controls: Any) -> None:
+        """Write low-level actuator or torque controls."""
+        raise NotImplementedError("write_controls not supported by this backend")
 
 
 _REGISTRY: Dict[str, Type[PhysicsBackend]] = {}
