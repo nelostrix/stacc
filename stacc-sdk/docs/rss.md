@@ -75,15 +75,95 @@ array         := '[' (value (',' value)*)? ']'
 
 | RSS block | Becomes |
 |---|---|
-| `body` / `chassis` | The robot's root `Link`. `shape: differential-drive` (or `ackermann`/`mecanum`/`omni`) sets `robot.fixed_base = False`; anything else is treated as a fixed-base robot. |
-| `arm` / `leg` / `wheel` / `gripper` / `head` (directly under the robot, or nested one level inside `actuators { }`) | A child `Link` + `Joint`, attached to the root. `wheel` gets a `continuous` joint; everything else `revolute`. |
-| ...with `joints: N` (N > 1) | An **N-segment serial chain** instead of a single joint — `arm left { joints: 6; reach: 900mm; }` produces `arm_left_1 … arm_left_6`, each its own revolute joint, `reach` split evenly across segments. Alternates Y/Z rotation axes down the chain. |
+| `body` / `chassis` | The robot's root `Link`. A robot with legs, wheels or rotors, or a `differential-drive`/`ackermann`/`mecanum`/`omni` chassis, is free to move (`robot.fixed_base = False`); anything else is fixed to the floor. `base: fixed;` / `base: free;` overrides that. |
+| `arm` / `leg` / `wheel` / `gripper` / `head` / `rotor` (directly under the robot, or nested one level inside `actuators { }`) | A child `Link` + `Joint`, mounted on the body — see "Where limbs go" below. `wheel` gets a `continuous` joint, `rotor` a fixed joint plus a thrust actuator, everything else `revolute`. |
+| ...with `joints: N` (N > 1) | An **N-segment serial chain** instead of a single joint — `arm left { joints: 6; reach: 900mm; }` produces `arm_left_1 … arm_left_6`, each its own revolute joint, `reach` split evenly across segments. |
 | `sensors { ... }` | Each child becomes a sensor via `Robot.attach_sensor`. `lidar`/`camera`/`imu` kinds are wired to the **real** `stacc.sensors` drivers (so they produce actual MuJoCo-backed data in `stacc rss run --sim`); any other kind falls back to a generic, inert `SensorSpec` so nothing is silently dropped. |
 | `appearance` / `style` | Real CSS-like selectors + cascade — see "Styling: selectors, variables, cascade" below. |
 | `component "name" { ... }` + `use name;` | The component's own properties become **defaults** (the using block's own properties win on conflict); its child blocks are prepended. Applied recursively at every nesting depth, with cycle detection. |
 | `use "path/to/file.rss:name";` | Cross-file component reuse — resolves `path/to/file.rss` against the compiling file's own directory, then any `--rss-path` directories, and pulls `name` from that file's `component` defs. This is the actual "shared stylesheet" behavior, not just per-file defaults. |
 | Anything else at the top level (e.g. a `navigation { ... }` block) | Not a recognized structural block, so nothing is built from it — but it's **never silently dropped**: its properties land in `robot.rss_metadata[block_name]`, and a warning is emitted (`stacc rss check`/`build` print it; also available as `robot.rss_warnings`). |
 | Any property that doesn't map onto a `Link`/`Joint`/`Geometry` field (`payload`, `actuator`, `motor`, sensor `model:` strings, ...) | Preserved verbatim in `robot.rss_metadata[link_name]`, unit-normalized, so it's inspectable even though nothing consumes it structurally yet. |
+
+## Where limbs go
+
+Each limb's first joint sits on the body's surface, chosen from its label,
+and each segment hangs **off** its joint (so joints pivot at the end of a
+segment, the way real hardware does). +X is forward, +Y is left (ROS REP 103).
+
+| Limb | Mounted | Grows |
+|---|---|---|
+| `leg` | under the body, at the corner its label names (`front_left`, `rear_right`, `fl`, `rr`, …; unlabeled legs fill corners in order) | down |
+| `wheel` | on the side its label names, axle along Y, at the front/rear its label names | — |
+| `rotor` | on top, at a corner | — |
+| `arm` / `head` | on top, offset by `left`/`right`/`front`/`rear` in the label | up |
+| `gripper` | at the tip of the arm with the same label (or the first arm) | up |
+
+- `at: [x, y, z];` places the first joint explicitly (metres from the body's centre).
+- `axes: [z, y, y];` (or `axis: z;` for a one-joint limb) sets each joint's rotation axis.
+  Defaults: legs `x, y, y` (hip abduction, hip flexion, knee), arms
+  `z, y, y, x, y, x` (base yaw, shoulder, elbow, wrist roll/pitch/roll), heads `z, y`.
+- Fixed robots stand on the floor; mobile robots spawn just above it.
+- A body resting only on two centre-line wheels tips over; the compiler warns.
+
+## Joints and motors
+
+| Property | Meaning |
+|---|---|
+| `effort: 2.5Nm;` | Motor stall torque — the most the joint can apply (MuJoCo `forcerange`). |
+| `speed: 300rpm;` (also `deg/s`, `rad/s`; alias `velocity:`) | Motor no-load speed. |
+| `damping: 0.1;` | Viscous joint damping, N·m·s/rad. |
+| `friction: 0.02;` | Dry (Coulomb) joint friction, N·m (MuJoCo `frictionloss`). |
+| `limits: [-90deg, 45deg];` | Range of a revolute joint. |
+
+With both `effort` and `speed`, the joint behaves like a DC motor: available
+torque falls linearly with speed, τ = τ_cmd − (effort / speed)·ω, so a wheel
+settles at a top speed instead of accelerating forever. (`speed` without
+`effort` is recorded and warned about.) Joints are servoed by MuJoCo itself —
+a position actuator integrated implicitly, stable at any gains — and the
+torque reported is what was actually applied.
+
+## Rotors
+
+`rotor front_left { thrust: 6N; radius: 64mm; }` is a thrust actuator on top
+of the body: force along the rotor's axis, up to `thrust:` newtons, plus a yaw
+reaction torque of `torque_ratio:` (default 0.016 m) per newton, opposite to
+its `spin:` (`cw`/`ccw`; default is the X-quad pattern — front-left and
+rear-right counter-clockwise). Command it through the runtime API with
+`{"thrusts": [N, ...]}` (`command_thrusts` in the Python/C++/Rust clients), in
+the order listed by telemetry's `thrusters`.
+
+## RSS inside Python, C++ and Rust
+
+A program can carry its robot's description between `<<<RSS>>>` and
+`<<</RSS>>>`, somewhere its own language ignores:
+
+```python
+from stacc.rss import rss
+ROBOT = rss("""<<<RSS>>>
+robot scout { chassis { shape: differential-drive; } wheel front_left { radius: 60mm; } }
+<<</RSS>>>""")
+```
+
+```cpp
+/* <<<RSS>>>
+robot arm { body { shape: box; } arm main { joints: 3; reach: 600mm; } }
+<<</RSS>>> */
+```
+
+Lines may also share a comment leader (`# `, `// `, ` * `), which is
+stripped. A file may hold several blocks (e.g. a component library and a
+robot). Errors are reported at the line and column of the host file.
+
+- Python: `rss(text)` compiles an inline description; `this_file()` compiles
+  the calling file's blocks; `load_file(path)` compiles any `.rss` or host file.
+- `stacc rss check|build|run|deploy` accept `.py`/`.cpp`/`.rs` files directly.
+- The daemon's `/v1/rss/compile`, `/v1/rss/load` and `/v1/runtime/load_project`
+  accept a whole host file; `RuntimeClient.load_file(__file__)` (Python),
+  `stacc::Runtime::load_file(__FILE__)` (C++, `bindings/cpp/stacc_runtime.hpp`)
+  and `Runtime::load_file(file!())` (Rust, `bindings/rust/stacc_runtime`) send it.
+- Examples: `examples/embedded/scout_rover.py`, `examples/embedded/arm_reach.cpp`,
+  `bindings/rust/stacc_runtime/examples/quadruped_crouch.rs`.
 
 ## Styling: selectors, variables, cascade
 
@@ -205,9 +285,9 @@ generates a starting point that targets it.
 
 ## Known simplifications (by design, for this version)
 
-- A multi-joint limb (`joints: N`) is a straight serial chain with a fixed
-  Y/Z axis alternation — it doesn't yet support explicit per-joint axis,
-  limits, or non-serial (e.g. differential/parallel) topologies.
+- A multi-joint limb (`joints: N`) is a straight serial chain. Axes, limits
+  and motor properties apply to every joint of the limb alike; non-serial
+  (closed-loop, differential, parallel) topologies aren't supported.
 - Sensor `model:` strings (`rplidar-a2`, `realsense-d455`, ...) aren't
   matched to specific hardware profiles — only the generic sensor *kind*
   (`lidar`/`camera`/`imu`) selects a real driver; the model name is kept as

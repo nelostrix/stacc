@@ -15,6 +15,17 @@ from __future__ import annotations
 
 from stacc.rss.ast_nodes import Block, ComponentDef, Document, NumberValue, RobotDef
 from stacc.rss.compiler import SensorSpec, compile_document, compile_robot
+from stacc.rss.embed import (
+    CLOSE_MARKER,
+    OPEN_MARKER,
+    EmbeddedRSS,
+    compile_embedded,
+    extract_rss_blocks,
+    has_embedded_rss,
+    load_file,
+    rss,
+    this_file,
+)
 from stacc.rss.errors import RSSCompileError, RSSError, RSSSyntaxError
 from stacc.rss.parser import parse
 from stacc.rss.ros2_skeleton import write_ros2_package
@@ -24,6 +35,15 @@ __all__ = [
     "compile_document",
     "compile_robot",
     "write_ros2_package",
+    "rss",
+    "this_file",
+    "load_file",
+    "compile_embedded",
+    "extract_rss_blocks",
+    "has_embedded_rss",
+    "EmbeddedRSS",
+    "OPEN_MARKER",
+    "CLOSE_MARKER",
     "SensorSpec",
     "Document",
     "RobotDef",

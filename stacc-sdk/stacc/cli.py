@@ -1150,17 +1150,25 @@ def cmd_registry(args):
 # COMMAND: rss (parse / compile RSS robot descriptions)
 # ──────────────────────────────────────────────
 def _rss_load_document(file_path):
-    from stacc.rss import RSSSyntaxError, parse
+    """Parse a `.rss` file, or the `<<<RSS>>>` block(s) of a Python/C++/Rust file."""
+    from stacc.rss import RSSCompileError, RSSSyntaxError, parse
+    from stacc.rss.embed import has_embedded_rss, parse_embedded
 
     path = Path(file_path)
     if not path.exists():
         log_error(f"RSS file not found: {file_path}")
         sys.exit(1)
+    text = path.read_text()
     try:
-        return parse(path.read_text())
+        if path.suffix != ".rss" and has_embedded_rss(text):
+            return parse_embedded(text, str(path))[0]
+        return parse(text)
     except RSSSyntaxError as e:
-        log_error("RSS syntax error")
+        log_error(f"RSS syntax error in {path}")
         print(f"  {Color.DIM}{e}{Color.RESET}")
+        sys.exit(1)
+    except RSSCompileError as e:
+        log_error(f"RSS error in {path}: {e}")
         sys.exit(1)
 
 
@@ -1519,12 +1527,12 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
     )
 
     p_rss_check = p_rss_sub.add_parser("check", help="Parse + compile an .rss file, report only")
-    p_rss_check.add_argument("file", help="Path to the .rss file")
+    p_rss_check.add_argument("file", help="Path to an .rss file, or a .py/.cpp/.rs file with an <<<RSS>>> block")
     p_rss_check.add_argument("--robot", help="Robot name to compile (if the file defines several)")
     p_rss_check.add_argument("--rss-path", action="append", help=rss_path_help)
 
     p_rss_build = p_rss_sub.add_parser("build", help="Compile an .rss file to URDF")
-    p_rss_build.add_argument("file", help="Path to the .rss file")
+    p_rss_build.add_argument("file", help="Path to an .rss file, or a .py/.cpp/.rs file with an <<<RSS>>> block")
     p_rss_build.add_argument("--robot", help="Robot name to compile (if the file defines several)")
     p_rss_build.add_argument("--out", help="Output directory (default: build/)")
     p_rss_build.add_argument("--rss-path", action="append", help=rss_path_help)
@@ -1537,7 +1545,7 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
     )
 
     p_rss_run = p_rss_sub.add_parser("run", help="Compile an .rss file and simulate it")
-    p_rss_run.add_argument("file", help="Path to the .rss file")
+    p_rss_run.add_argument("file", help="Path to an .rss file, or a .py/.cpp/.rs file with an <<<RSS>>> block")
     p_rss_run.add_argument("--robot", help="Robot name to compile (if the file defines several)")
     p_rss_run.add_argument("--rss-path", action="append", help=rss_path_help)
     p_rss_run.add_argument("--sim", action="store_true", help="Run in the physics simulator")
@@ -1548,7 +1556,7 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
     p_rss_deploy = p_rss_sub.add_parser(
         "deploy", help="Compile an .rss file, package it, and deploy it to real hardware over SSH"
     )
-    p_rss_deploy.add_argument("file", help="Path to the .rss file")
+    p_rss_deploy.add_argument("file", help="Path to an .rss file, or a .py/.cpp/.rs file with an <<<RSS>>> block")
     p_rss_deploy.add_argument("target_ip", help="Target device IP address")
     p_rss_deploy.add_argument("--robot", help="Robot name to compile (if the file defines several)")
     p_rss_deploy.add_argument("--rss-path", action="append", help=rss_path_help)

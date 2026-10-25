@@ -1,19 +1,23 @@
 // Example RSS robot description — a quadcopter drone, mirroring stacc's
-// own `drone` CLI template. Rotors are modeled as fixed (non-actuated)
-// `arm` stubs since RSS's limb vocabulary doesn't yet have a dedicated
-// "rotor" block type — a documented simplification, not a real spin joint.
+// own `drone` CLI template. Each `rotor` is a thrust actuator at a corner of
+// the body: `thrust:` is its maximum (N), `spin:` defaults to the X-quad
+// pattern (front-left and rear-right counter-clockwise), and the yaw reaction
+// torque per newton is `torque_ratio:` (default 0.016 m). Command thrust with
+// the runtime API's {"thrusts": [N, ...]} (front_left, front_right,
+// rear_left, rear_right order).
 robot drone {
     body {
         shape: box;
         material: carbon_fiber;
         dimensions: [220mm, 220mm, 60mm];
+        mass: 1kg;
         color: "#101010";
     }
 
-    arm rotor_fl { actuator: bldc; reach: 180mm; }
-    arm rotor_fr { actuator: bldc; reach: 180mm; }
-    arm rotor_rl { actuator: bldc; reach: 180mm; }
-    arm rotor_rr { actuator: bldc; reach: 180mm; }
+    rotor front_left  { thrust: 6N; radius: 64mm; actuator: bldc; }
+    rotor front_right { thrust: 6N; radius: 64mm; actuator: bldc; }
+    rotor rear_left   { thrust: 6N; radius: 64mm; actuator: bldc; }
+    rotor rear_right  { thrust: 6N; radius: 64mm; actuator: bldc; }
 
     sensors {
         imu body {

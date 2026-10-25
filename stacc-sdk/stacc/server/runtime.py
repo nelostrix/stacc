@@ -29,6 +29,13 @@ import time
 from collections import deque
 from typing import Any, Callable, Dict, List, Optional
 
+from stacc.server.rt_channel import (
+    KIND_POSITION,
+    KIND_TORQUE,
+    MODE_LOCKSTEP,
+    VERSION as RT_CHANNEL_VERSION,
+    ControlChannel,
+)
 from stacc.sim.engine import SimulationEngine, SimulationConfig
 
 
@@ -59,14 +66,36 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+_MAX_INLINE_ARRAY = 64
+
+
+def _compact(value: Any) -> Any:
+    """Large arrays (camera frames, depth maps, dense scans) are summarized as
+    their shape instead of being expanded element by element. Expanding a
+    single camera frame takes ~1 s under the runtime lock, which starves the
+    physics loop and stalls every other request while telemetry is polled."""
+    size = getattr(value, "size", None)
+    if hasattr(value, "shape") and isinstance(size, int) and size > _MAX_INLINE_ARRAY:
+        return {"shape": list(value.shape), "dtype": str(getattr(value, "dtype", ""))}
+    if isinstance(value, (list, tuple)) and len(value) > _MAX_INLINE_ARRAY:
+        return {"length": len(value)}
+    if isinstance(value, dict):
+        return {k: _compact(v) for k, v in value.items()}
+    return value
+
+
 def _sensor_readout(robot: Any) -> Dict[str, Any]:
-    """Read all attached sensors into a JSON-safe dict (skipping image arrays)."""
+    """The latest sample of every sensor, as taken by the physics loop at the
+    sensor's own rate, in a JSON-safe dict (large arrays summarized).
+
+    This never reads or resets a sensor itself: reading here re-rendered
+    cameras inside the runtime lock on every telemetry poll (stalling the
+    physics loop and robot loads), and reset() restarted each sensor's
+    sampling clock."""
     out: Dict[str, Any] = {}
     for sensor in getattr(robot, "sensors", []):
-        try:
-            sensor.reset()
-            data = sensor.read()
-        except Exception:
+        data = getattr(sensor, "_last_reading", None)
+        if data is None:
             continue
         if isinstance(data, dict):
             cleaned = {}
@@ -75,10 +104,10 @@ def _sensor_readout(robot: Any) -> Dict[str, Any]:
                     v = {key: val for key, val in v.items() if key != "image"}
                 if isinstance(v, list) and v and hasattr(v[0], "shape"):
                     continue
-                cleaned[k] = _jsonable(v)
+                cleaned[k] = _jsonable(_compact(v))
             out[sensor.name] = cleaned
         else:
-            out[sensor.name] = _jsonable(data)
+            out[sensor.name] = _jsonable(_compact(data))
     return out
 
 
@@ -275,6 +304,12 @@ class StaccRuntime:
         )
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        # Shared-memory control channel (stacc/server/rt_channel.py), off until enabled.
+        self._channel = None
+        self._channel_cfg: Optional[Dict[str, Any]] = None
+        self._channel_stats = {"cycles": 0, "commands": 0, "missed_deadlines": 0, "late_commands": 0}
+        self._channel_last_cmd = 0
+        self._channel_published_step = -1
         self._running = False
         self._paused = False
 
@@ -305,6 +340,12 @@ class StaccRuntime:
             self.robot = robot
             self.engine = SimulationEngine(robot, self.config) if robot is not None else None
             self._cmd_positions = None
+            # Bumped on every load, even of a same-named robot, so viewers know
+            # to re-fetch the structure after an edit.
+            self.robot_revision = getattr(self, "robot_revision", 0) + 1
+            # A new robot means new joint/rotor counts: rebuild the channel layout.
+            if self._channel_cfg is not None:
+                self._open_channel()
         if was_running and robot is not None:
             self.start()
 
@@ -364,6 +405,8 @@ class StaccRuntime:
                 self.robot._state["joint_velocities"] = [0.0] * n
                 self.robot.set_joint_torques([0.0] * n)
                 self.robot._state["pose"] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                self.robot._state.pop("base_quat", None)
+                self.robot._state.pop("thrusts", None)
             self._cmd_positions = None
             self._paused = False
 
@@ -382,8 +425,17 @@ class StaccRuntime:
     # ── stepping ──
 
     def _apply_command(self):
-        """Convert commanded joint positions into servo torques (JointImpedance)."""
-        if self._cmd_positions is None or self.robot is None:
+        """Hand commanded joint positions to the physics backend's servo
+        (JointImpedance). MuJoCo runs it as an actuator, which is stable for any
+        gains; other backends get the equivalent PD torques."""
+        if self.robot is None:
+            return
+        if self._cmd_positions is None:
+            self.robot._state.pop("servo", None)
+            return
+        backend = getattr(self.engine, "_physics_backend", None)
+        if backend is not None and hasattr(backend, "_actuator_of"):
+            self.robot._state["servo"] = {"kp": self.kp, "kd": self.kd, "targets": self._cmd_positions}
             return
         positions = self.robot.get_joint_positions()
         velocities = self.robot.get_joint_velocities()
@@ -398,7 +450,11 @@ class StaccRuntime:
         self.engine._physics_backend.step(dt)
         for sensor in self.robot.sensors:
             if sensor.enabled and sensor.should_update(self.engine.state.time):
-                sensor.read()
+                # Keep the sample: telemetry reports it instead of re-reading.
+                try:
+                    sensor._last_reading = sensor.read()
+                except Exception:
+                    pass
         self.robot._tick(dt)
         self.engine.state.time += dt
 
@@ -423,14 +479,121 @@ class StaccRuntime:
                 with self._period_lock:
                     self._periods.append(start - last_start)
             last_start = start
+            channel = self._channel
+            active = self._running and not self._paused and backend is not None
+            if channel is not None and active and channel.mode == MODE_LOCKSTEP:
+                # Outside the lock, so HTTP requests are never held up by a slow controller.
+                self._await_lockstep_command(channel)
             with self._lock:
                 if not self._stop_event.is_set() and self._running and not self._paused and backend is not None:
+                    if self._channel is not None:
+                        self._apply_channel_command(self._channel)
                     for _ in range(substeps):
                         self._substep(self.config.timestep)
                     self.engine.state.step += substeps
+                    if self._channel is not None:
+                        self._publish_channel_state(self._channel)
             elapsed = time.perf_counter() - start
             self.step_time_ms = elapsed * 1000.0
             time.sleep(max(0.0, cycle - elapsed))
+
+    # ── shared-memory control channel ──
+
+    def enable_channel(self, path: str, mode: int = 0, timeout_s: float = 1.0) -> Dict[str, Any]:
+        """Create (or re-create) the channel at `path` and start serving it."""
+        with self._lock:
+            self._channel_cfg = {"path": path, "mode": int(mode), "timeout_s": float(timeout_s)}
+            self._channel_stats = {"cycles": 0, "commands": 0, "missed_deadlines": 0, "late_commands": 0}
+            self._open_channel()
+            return self.channel_status()
+
+    def disable_channel(self) -> None:
+        with self._lock:
+            self._channel_cfg = None
+            if self._channel is not None:
+                self._channel.close()
+                self._channel = None
+
+    def channel_status(self) -> Dict[str, Any]:
+        ch = self._channel
+        if ch is None:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "path": ch.path,
+            "layout_version": RT_CHANNEL_VERSION,
+            "mode": "lockstep" if ch.mode == MODE_LOCKSTEP else "realtime",
+            "timeout_s": self._channel_cfg["timeout_s"] if self._channel_cfg else None,
+            "n_joints": ch.n_joints,
+            "n_thrusters": ch.n_thrusters,
+            "joint_names": self.joint_names(),
+            "thrusters": list(getattr(self.robot, "thrusters", []) or []) if self.robot is not None else [],
+            "published_step": self._channel_published_step,
+            **self._channel_stats,
+        }
+
+    def _open_channel(self) -> None:
+        """(Re)build the channel for the current robot. Caller holds the lock."""
+        if self._channel is not None:
+            self._channel.close()
+            self._channel = None
+        cfg = self._channel_cfg
+        if cfg is None or self.robot is None:
+            return
+        n_joints = len(self.robot._state["joint_positions"])
+        n_thrusters = len(getattr(self.robot, "thrusters", []) or [])
+        self._channel = ControlChannel.create(cfg["path"], n_joints, n_thrusters, cfg["mode"])
+        self._channel_last_cmd = 0
+        self._channel_published_step = -1
+        if self.engine is not None:
+            self._publish_channel_state(self._channel)
+
+    def _await_lockstep_command(self, channel) -> None:
+        """Lockstep: block until the controller answers the last published step."""
+        want = self._channel_published_step
+        timeout = self._channel_cfg["timeout_s"] if self._channel_cfg else 1.0
+        deadline = time.perf_counter() + timeout
+        while not self._stop_event.is_set():
+            cmd = channel.read_command()
+            if cmd is not None and cmd.answers_step >= want:
+                return
+            if time.perf_counter() >= deadline:
+                self._channel_stats["missed_deadlines"] += 1
+                return
+            time.sleep(0)  # yield, but stay responsive
+
+    def _apply_channel_command(self, channel) -> None:
+        cmd = channel.read_command()
+        if cmd is None or cmd.cmd_id == self._channel_last_cmd:
+            return
+        self._channel_last_cmd = cmd.cmd_id
+        self._channel_stats["commands"] += 1
+        if cmd.answers_step < self._channel_published_step:
+            self._channel_stats["late_commands"] += 1  # computed from an older state
+        if cmd.kind == KIND_POSITION:
+            self._cmd_positions = [j.clamp(v) for j, v in zip(self.robot.joints, cmd.values)]
+        elif cmd.kind == KIND_TORQUE:
+            self._cmd_positions = None
+            self.robot.set_joint_torques(list(cmd.values))
+        if cmd.thrust is not None:
+            self.robot._state["thrusts"] = list(cmd.thrust)
+
+    def _publish_channel_state(self, channel) -> None:
+        state = self.robot._state
+        pose = state.get("pose", [0.0] * 6)
+        quat = state.get("base_quat") or [1.0, 0.0, 0.0, 0.0]
+        step = self.engine.state.step
+        channel.write_state(
+            step,
+            self.engine.state.time,
+            [pose[0], pose[1], pose[2], *quat],
+            state["joint_positions"],
+            state["joint_velocities"],
+            state["joint_torques"],
+            state.get("thrusts") or [0.0] * channel.n_thrusters,
+        )
+        self._channel_published_step = step
+        self._channel_stats["cycles"] += 1
 
     # ── joint command API ──
 
@@ -479,6 +642,29 @@ class StaccRuntime:
                 raise RuntimeError("No robot set")
             self._cmd_positions = None
             self.robot.set_joint_torques([float(t) for t in torques])
+
+    def _thruster_readout(self) -> List[Dict[str, Any]]:
+        thrusts = self.robot._state.get("thrusts") or []
+        return [
+            {
+                "name": name,
+                "thrust": float(thrusts[i]) if i < len(thrusts) else 0.0,
+                "max_thrust": self.robot._links_by_name[name].thruster["max_thrust"],
+            }
+            for i, name in enumerate(getattr(self.robot, "thrusters", []))
+        ]
+
+    def set_thrusts(self, thrusts: List[float]):
+        """Rotor thrust in newtons, in robot.thrusters order (clamped to each
+        rotor's 0..max by the actuator)."""
+        with self._lock:
+            if self.robot is None:
+                raise RuntimeError("No robot set")
+            n = len(getattr(self.robot, "thrusters", []))
+            if n == 0:
+                raise ValueError("This robot has no rotors")
+            values = [float(t) for t in thrusts][:n]
+            self.robot._state["thrusts"] = values + [0.0] * (n - len(values))
 
     def clear_commands(self):
         """Drop servo commands and stop applying torques."""
@@ -617,6 +803,7 @@ class StaccRuntime:
                 pose = [0, 0, 0, 0, 0, 0]
             return {
                 "robot_name": self.robot.name,
+                "robot_revision": getattr(self, "robot_revision", 0),
                 "dof": self.robot.dof,
                 "hz": self.hz,
                 "timestep": self.config.timestep,
@@ -629,6 +816,9 @@ class StaccRuntime:
                 "loop": loop,
                 "joints": joints,
                 "pose": pose,
+                "thrusters": self._thruster_readout(),
+                "base_quat": _jsonable(self.robot._state.get("base_quat")),
+                "fixed_base": bool(getattr(self.robot, "fixed_base", True)),
                 "end_effector": self.end_effector_pose(),
                 "sensors": _sensor_readout(self.robot),
                 "control": {

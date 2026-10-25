@@ -15,9 +15,11 @@ import json
 import re
 import time
 import math
+import faulthandler
 import hashlib
+import signal
 import logging
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List
 
 # Add STACC SDK to python path.
@@ -42,7 +44,7 @@ try:
     from stacc.server import StaccRuntime, create_robot
 
     RT = StaccRuntime(physics="mujoco", hz=1000.0, timestep=0.001, headless=True)
-    RT.set_robot(create_robot("arm", name="Atlas-07"))
+    RT.set_robot(create_robot("arm", name="default_arm"))
     RT.set_joint_positions([0.0] * RT.robot.dof)  # servo-hold zero pose
     RT.start()
     STACC_SDK_AVAILABLE = True
@@ -129,9 +131,13 @@ def _loop_timing() -> Dict[str, Any]:
     return RT.loop_stats()
 
 
-# The POSIX shared-memory ring buffer exists in stacc.hal.shm but nothing in this
-# daemon writes to it yet, so report that instead of a fake "locked" state.
-SHM_STATUS = "inactive"
+def _shm_status() -> str:
+    """One-line state of the shared-memory control channel (the real data
+    plane, stacc/server/rt_channel.py), e.g. "lockstep /dev/shm/stacc_rt_8766"."""
+    if RT is None:
+        return "inactive"
+    st = RT.channel_status()
+    return f"{st['mode']} {st['path']}" if st.get("enabled") else "inactive"
 
 
 def _joint_world_offset(robot: Any, joint: Any, links_by_name: Dict[str, Any]) -> List[float]:
@@ -177,6 +183,10 @@ def serialize_robot(robot: Any) -> Dict[str, Any]:
         "links": [l.to_dict() for l in robot.links],
         "joints": joints_json,
         "warnings": list(getattr(robot, "rss_warnings", []) or []),
+        # Height of the root body's frame above the floor at spawn (fixed-base
+        # robots stay there; mobile robots then follow the live pose).
+        "spawn_height": float(getattr(robot, "spawn_height", 0.0) or 0.0),
+        "fixed_base": bool(getattr(robot, "fixed_base", True)),
     }
 
 
@@ -205,7 +215,7 @@ def live_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
         "torques_nm": torques,
         "cbf_margin_mm": margin_mm,
         "cbf_safe": cbf_safe,
-        "shm_status": SHM_STATUS,
+        "shm_status": _shm_status(),
         "energy_j": _real_energy(RT),
         "step_time_ms": loop["step_time_ms"],
     }
@@ -291,12 +301,14 @@ def _robot_from_source(fmt: str, source: str) -> Any:
                 with open(path, "w", encoding="utf-8") as fh:
                     fh.write(source)
                 return load_sdf(path)
-        if fmt == "rss":
-            from stacc.rss import compile_document, parse
-            return compile_document(parse(source), search_paths=[EXAMPLES_DIR])
+        if fmt == "rss" or fmt in EMBEDDED_RSS_FORMATS:
+            return _compile_rss(source)
     except Exception as e:  # parser/compiler errors carry useful text
         raise ValueError(str(e) or e.__class__.__name__) from e
-    raise ValueError(f"Unsupported model format '{fmt}' (expected urdf, sdf or rss).")
+    raise ValueError(
+        f"Unsupported model format '{fmt}' (expected urdf, sdf, rss, or a "
+        f"Python/C++/Rust file with an RSS block)."
+    )
 
 
 def model_inspect(req: Dict[str, Any]) -> Dict[str, Any]:
@@ -514,10 +526,21 @@ def _rss_warning_diagnostics(robot: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def _compile_rss(source: str) -> Any:
-    """Parse + compile RSS source into a stacc Robot. Raises on any failure."""
-    from stacc.rss import compile_document, parse
+# Host-language files that carry their robot in a <<<RSS>>> block.
+EMBEDDED_RSS_FORMATS = {"py", "python", "cpp", "cc", "cxx", "hpp", "h", "c", "rs", "rust", "embedded"}
 
+
+def _compile_rss(source: str) -> Any:
+    """Parse + compile RSS into a stacc Robot. Raises on any failure.
+
+    `source` is either plain RSS or a whole Python/C++/Rust file containing
+    `<<<RSS>>> ... <<</RSS>>>` block(s); errors from embedded blocks carry the
+    host file's line/column, so diagnostics land on the line being edited.
+    """
+    from stacc.rss import compile_document, compile_embedded, has_embedded_rss, parse
+
+    if has_embedded_rss(source):
+        return compile_embedded(source, search_paths=[EXAMPLES_DIR])
     doc = parse(source)
     return compile_document(doc, search_paths=[EXAMPLES_DIR])
 
@@ -582,7 +605,70 @@ def rss_load(req: Dict[str, Any]) -> Dict[str, Any]:
     RT.set_robot(robot)
     RT.set_joint_positions([0.0] * robot.dof)
     RT.start()
-    return {"robot": serialize_robot(robot), "diagnostics": _rss_warning_diagnostics(robot)}
+    return {
+        "robot": {**serialize_robot(robot), "revision": getattr(RT, "robot_revision", 0)},
+        "diagnostics": _rss_warning_diagnostics(robot),
+    }
+
+
+def sdk_modules() -> Dict[str, Any]:
+    """The installed stacc SDK's real subpackages: summary line and files."""
+    import importlib
+    import stacc
+
+    root = os.path.dirname(stacc.__file__)
+    modules = []
+    for entry in sorted(os.listdir(root)):
+        pkg_dir = os.path.join(root, entry)
+        init = os.path.join(pkg_dir, "__init__.py")
+        if entry.startswith("_") or not os.path.isfile(init):
+            continue
+        summary = ""
+        try:
+            doc = importlib.import_module(f"stacc.{entry}").__doc__ or ""
+            summary = next((line.strip() for line in doc.splitlines() if line.strip()), "")
+        except Exception as e:  # a package that fails to import says so
+            summary = f"(import failed: {e.__class__.__name__})"
+        files = sorted(
+            os.path.join(pkg_dir, f) for f in os.listdir(pkg_dir) if f.endswith(".py") and not f.startswith("_")
+        )
+        modules.append({"name": f"stacc.{entry}", "summary": summary, "path": pkg_dir, "init": init, "files": files})
+    return {"root": root, "modules": modules}
+
+
+# Upload methods that flash a microcontroller from this machine (ssh/webusb
+# boards are deployed differently, see `stacc rss deploy`).
+_FLASHABLE_METHODS = {"avrdude", "esptool", "bossac", "stlink", "picotool", "uf2", "dfu-util", "teensy"}
+
+
+def hal_boards() -> Dict[str, Any]:
+    from stacc.hal.boards import FirmwareUploader, list_boards
+
+    boards = [
+        {"name": b.name, "upload_method": b.upload_method, "cpu": b.cpu, "platform": b.platform}
+        for b in list_boards()
+        if b.upload_method in _FLASHABLE_METHODS and b.upload_method in FirmwareUploader.UPLOAD_COMMANDS
+    ]
+    return {"boards": boards}
+
+
+def hal_upload_command(req: Dict[str, Any]) -> Dict[str, Any]:
+    """The real shell command that flashes `firmware` to `board` on `port`.
+    Only builds it; the Studio runs it in its terminal and shows the output."""
+    import shlex
+    from stacc.hal.boards import FirmwareUploader
+
+    firmware = str(req.get("firmware") or "").strip()
+    port = str(req.get("port") or "/dev/ttyACM0").strip()
+    if not firmware:
+        return {"error": "firmware (path to the compiled image) is required", "kind": "input"}
+    try:
+        uploader = FirmwareUploader(str(req.get("board") or ""), port=shlex.quote(port))
+    except ValueError as e:
+        return {"error": str(e), "kind": "input"}
+    if uploader.board_def.upload_method not in _FLASHABLE_METHODS:
+        return {"error": f"{uploader.board_def.name} is not flashed over USB (method: {uploader.board_def.upload_method})", "kind": "input"}
+    return {"command": uploader.get_upload_command(shlex.quote(firmware)), "board": uploader.board_def.name}
 
 
 def rss_examples() -> Dict[str, Any]:
@@ -591,8 +677,9 @@ def rss_examples() -> Dict[str, Any]:
     if os.path.isdir(EXAMPLES_DIR):
         for fname in sorted(os.listdir(EXAMPLES_DIR)):
             if fname.endswith(".rss"):
-                with open(os.path.join(EXAMPLES_DIR, fname), "r") as f:
-                    examples.append({"name": fname, "source": f.read()})
+                full = os.path.join(EXAMPLES_DIR, fname)
+                with open(full, "r") as f:
+                    examples.append({"name": fname, "path": full, "source": f.read()})
     return {"examples": examples}
 
 
@@ -786,7 +873,9 @@ def runtime_joint_command(req: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         return err
     try:
-        if req.get("torques") is not None:
+        if req.get("thrusts") is not None:
+            rt.set_thrusts([float(t) for t in req["thrusts"]])
+        elif req.get("torques") is not None:
             rt.set_joint_torques([float(t) for t in req["torques"]])
         elif req.get("joint") is not None and req.get("angle_rad") is not None:
             rt.set_joint_angle(str(req["joint"]), float(req["angle_rad"]))
@@ -794,7 +883,7 @@ def runtime_joint_command(req: Dict[str, Any]) -> Dict[str, Any]:
             rt.set_joint_positions([float(p) for p in req["positions"]])
         else:
             return {
-                "error": "Provide {positions:[rad]}, {joint,angle_rad} or {torques:[Nm]}",
+                "error": "Provide {positions:[rad]}, {joint,angle_rad}, {torques:[Nm]} or {thrusts:[N]}",
                 "kind": "input",
             }
     except (ValueError, RuntimeError) as e:
@@ -832,6 +921,36 @@ def runtime_telemetry() -> Dict[str, Any]:
     if err:
         return err
     return rt.snapshot()
+
+
+# The port this daemon actually bound (set in run_server); names its shm channel.
+SERVER_PORT = 8766
+
+
+def runtime_shm_status() -> Dict[str, Any]:
+    """The shared-memory control channel: layout, mode and counters."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    return rt.channel_status()
+
+
+def runtime_shm(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Enable or disable the shared-memory control channel (the data plane;
+    see stacc/server/rt_channel.py). {"enable": true, "mode": "realtime" |
+    "lockstep", "timeout_ms": 1000}."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    if req.get("enable") is False:
+        rt.disable_channel()
+        return {"enabled": False}
+    mode = str(req.get("mode") or "realtime").lower()
+    if mode not in ("realtime", "lockstep"):
+        return {"error": "mode must be 'realtime' or 'lockstep'", "kind": "input"}
+    timeout_ms = float(req.get("timeout_ms") or 1000)
+    path = f"/dev/shm/stacc_rt_{SERVER_PORT}"
+    return rt.enable_channel(path, mode=1 if mode == "lockstep" else 0, timeout_s=timeout_ms / 1000.0)
 
 
 def runtime_stop() -> Dict[str, Any]:
@@ -873,7 +992,7 @@ def compute_forward_kinematics(q_deg: List[float]) -> Dict[str, float]:
 
 
 def compute_rnea_gravity_torques(q_deg: List[float]) -> List[float]:
-    """RNEA analytical gravity torques (Nm) for the 6-DOF Atlas arm."""
+    """Analytic gravity torques (Nm) for the fallback 6-DOF arm (no SDK loaded)."""
     q_rad = [math.radians(a) for a in q_deg]
     masses = [3.2, 4.5, 3.1, 1.8, 1.2, 0.8]
     g = 9.81
@@ -906,7 +1025,7 @@ def fallback_simulate_step(req: Dict[str, Any]) -> Dict[str, Any]:
         "torques_nm": compute_rnea_gravity_torques(joints),
         "cbf_margin_mm": margin_mm,
         "cbf_safe": cbf_safe,
-        "shm_status": SHM_STATUS,
+        "shm_status": _shm_status(),
         "engine": "analytic_fallback",
         # No physics engine in this analytic fallback to derive real energy
         # from — 0.0 is the honest "not available" value here, not a guess.
@@ -982,6 +1101,7 @@ RUNTIME_GET = {
     "/v1/runtime/joints": runtime_joints,
     "/v1/runtime/sensors": runtime_sensors,
     "/v1/runtime/telemetry": runtime_telemetry,
+    "/v1/runtime/shm": runtime_shm_status,
 }
 RUNTIME_POST = {
     "/v1/runtime/load_project": runtime_load_project,
@@ -994,11 +1114,41 @@ RUNTIME_POST = {
     "/v1/runtime/joints/command": runtime_joint_command,
     "/v1/runtime/control/gains": runtime_control_gains,
     "/v1/runtime/stop": lambda req=None: runtime_stop(),
+    "/v1/runtime/shm": runtime_shm,
     "/v1/runtime/kill": lambda req=None: runtime_kill(),
 }
 
 
+# `kill -USR1 <pid>` prints every thread's Python stack to stderr — the way to
+# see what holds the runtime lock when a request hangs.
+faulthandler.register(signal.SIGUSR1, all_threads=True)
+
+
+def _json_safe(value: Any) -> Any:
+    """Replace non-finite floats with null. Python writes inf/nan as
+    `Infinity`/`NaN`, which is not JSON: browsers refuse to parse the whole
+    response (e.g. any robot with a continuous wheel joint, limits = ±inf)."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+class STACCHTTPServer(ThreadingHTTPServer):
+    """One thread per request. With a single-threaded server, one idle client
+    (browsers open speculative keep-alive sockets and never send on them) blocks
+    every other request, and the Studio then reports the daemon as unreachable."""
+
+    daemon_threads = True
+    request_queue_size = 64
+
+
 class STACCRequestHandler(BaseHTTPRequestHandler):
+    # Drop connections that send nothing instead of holding a worker forever.
+    timeout = 10
     def _cors_origin(self):
         origin = self.headers.get("Origin")
         return origin if origin in ALLOWED_ORIGINS else None
@@ -1021,7 +1171,7 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
         return True
 
     def _send_json(self, status: int, data: Any):
-        payload = json.dumps(data).encode("utf-8")
+        payload = json.dumps(_json_safe(data), allow_nan=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -1046,32 +1196,23 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
                 "platform": "STACC Universal Robotics Platform",
                 "version": STACC_VERSION,
                 "sdk_available": STACC_SDK_AVAILABLE,
+                "sdk_path": SDK_PATH,
                 "control_loop_hz": (round(1.0 / RT.config.timestep, 1) if RT else None),
                 "physics_engine": PHYSICS_ENGINE,
                 "mujoco_version": MUJOCO_VERSION,
                 "live_runtime": RT is not None,
                 "loop": _loop_timing(),
                 "cbf_barrier_margin_mm": CBF_BARRIER_MARGIN_MM,
-                "shm_status": SHM_STATUS,
+                "shm_status": _shm_status(),
                 "shm_ringbuffer_slots": 0,
-                "active_robot_model": (RT.robot.name if RT else "Atlas-07 6-DOF Anthropomorphic Arm"),
+                "active_robot_model": (RT.robot.name if RT is not None and RT.robot is not None else None),
                 "total_sim_steps": total_steps,
                 "uptime_seconds": int(time.time() - START_TIME),
                 "pid": os.getpid(),
             })
-        elif self.path == "/v1/templates":
-            self._send_json(200, {
-                "templates": [
-                    {"id": "arm_6dof", "name": "6-DOF Robotic Arm with Gripper", "dof": 6, "solver": "MuJoCo PGS"},
-                    {"id": "quadruped", "name": "Quadruped 12-DOF Walker", "dof": 12, "solver": "MuJoCo PGS"},
-                    {"id": "rover", "name": "6-Wheel Rocker-Bogie Rover", "dof": 6, "solver": "MuJoCo Bullet"},
-                    {"id": "drone", "name": "Quadcopter with PX4 Bridge", "dof": 4, "solver": "MuJoCo Aero"},
-                    {"id": "line_follower", "name": "2-Wheel Differential Mobile Base", "dof": 2, "solver": "STACC 2D"},
-                ]
-            })
         elif self.path == "/v1/robot/structure":
             if RT is not None and RT.robot is not None:
-                self._send_json(200, serialize_robot(RT.robot))
+                self._send_json(200, {**serialize_robot(RT.robot), "revision": getattr(RT, "robot_revision", 0)})
             else:
                 self._send_json(503, {"error": "Live SDK runtime unavailable — no robot loaded"})
         elif self.path == "/v1/rss/examples":
@@ -1079,6 +1220,14 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(200, rss_examples())
             else:
                 self._send_json(503, {"error": "Live SDK runtime unavailable — cannot read RSS examples"})
+        elif self.path in ("/v1/sdk/modules", "/v1/hal/boards"):
+            if not STACC_SDK_AVAILABLE:
+                self._send_json(503, {"error": "stacc SDK unavailable"})
+            else:
+                try:
+                    self._send_json(200, sdk_modules() if self.path == "/v1/sdk/modules" else hal_boards())
+                except Exception as e:
+                    self._send_json(500, {"error": str(e) or e.__class__.__name__})
         elif self.path in RUNTIME_GET:
             result = RUNTIME_GET[self.path]()
             self._send_json(503 if "error" in result else 200, result)
@@ -1104,7 +1253,7 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
             result = live_tune_gains(req_data) if RT else fallback_tune_gains(req_data)
             self._send_json(200, result)
 
-        elif self.path in ("/v1/model/inspect", "/v1/model/convert", "/v1/robot/load_model", "/v1/rss/bom", "/v1/rss/ros2_package", "/v1/rss/compile"):
+        elif self.path in ("/v1/model/inspect", "/v1/model/convert", "/v1/robot/load_model", "/v1/rss/bom", "/v1/rss/ros2_package", "/v1/rss/compile", "/v1/hal/upload_command"):
             handler = {
                 "/v1/model/inspect": model_inspect,
                 "/v1/model/convert": model_convert,
@@ -1112,6 +1261,7 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
                 "/v1/rss/bom": rss_bom,
                 "/v1/rss/ros2_package": rss_ros2_package,
                 "/v1/rss/compile": rss_compile,
+                "/v1/hal/upload_command": hal_upload_command,
             }[self.path]
             result = handler(req_data)
             self._send_json(400 if "error" in result else 200, result)
@@ -1152,7 +1302,7 @@ def run_server(port: int = 8766, max_port_attempts: int = 10):
     for attempt in range(max_port_attempts):
         bound_port = port + attempt
         try:
-            httpd = HTTPServer(("127.0.0.1", bound_port), STACCRequestHandler)
+            httpd = STACCHTTPServer(("127.0.0.1", bound_port), STACCRequestHandler)
             break
         except OSError:
             if attempt == max_port_attempts - 1:
@@ -1160,12 +1310,14 @@ def run_server(port: int = 8766, max_port_attempts: int = 10):
             continue
     assert httpd is not None
     port = bound_port
+    global SERVER_PORT
+    SERVER_PORT = port
     label = (
         f"Live SDK runtime ({RT.robot.name}, {RT.engine._physics_backend.__class__.__name__})"
         if RT is not None else "analytic fallback kernel"
     )
     print(f"🚀 [STACC-SERVER] STACC Universal Robotics & MuJoCo Daemon listening on http://127.0.0.1:{port}")
-    print(f"🤖 [STACC-SERVER] Platform: STACC v{STACC_VERSION} | 1000Hz RT-Kernel Active | {label}")
+    print(f"🤖 [STACC-SERVER] Platform: STACC v{STACC_VERSION} | control loop target {round(1.0 / RT.config.timestep) if RT is not None else 'n/a'} Hz | {label}")
     print(f"STACC_BOUND_PORT={port}", flush=True)
     try:
         httpd.serve_forever()

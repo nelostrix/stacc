@@ -107,6 +107,17 @@ class RuntimeClient:
     def load_project(self, source: str, format: str = "rss") -> Dict[str, Any]:
         return self._post("/v1/runtime/load_project", {"format": format, "source": source})
 
+    def load_file(self, path: str) -> Dict[str, Any]:
+        """Load a robot from a file: `.rss`, `.urdf`/`.sdf`, or a Python/C++/Rust
+        file whose robot is described in a `<<<RSS>>> ... <<</RSS>>>` block.
+
+            rt.load_file(__file__)   # the controller file describes its own robot
+        """
+        with open(path, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        suffix = path.rsplit(".", 1)[-1].lower() if "." in path else "rss"
+        return self.load_project(source, format=suffix)
+
     def start(self) -> Dict[str, Any]:
         return self._post("/v1/runtime/start")
 
@@ -163,6 +174,32 @@ class RuntimeClient:
 
     def command_torques(self, torques: List[float]) -> Dict[str, Any]:
         return self._post("/v1/runtime/joints/command", {"torques": [float(t) for t in torques]})
+
+    def command_thrusts(self, thrusts: List[float]) -> Dict[str, Any]:
+        """Rotor thrust in newtons, in the robot's rotor order (see telemetry
+        "thrusters"); each is clamped to 0..its declared `thrust:` maximum."""
+        return self._post("/v1/runtime/joints/command", {"thrusts": [float(t) for t in thrusts]})
+
+    # ── shared-memory control channel (the data plane) ──
+
+    def shm_status(self) -> Dict[str, Any]:
+        return self._get("/v1/runtime/shm")
+
+    def enable_shm(self, mode: str = "realtime", timeout_ms: float = 1000):
+        """Switch on the shared-memory control channel and open it.
+
+        mode "realtime": the runtime keeps its own clock and uses your newest
+        command. mode "lockstep": it waits for your answer to every step
+        (deterministic). Returns a `ControlChannel` (stacc/server/rt_channel.py);
+        joint order is `shm_status()["joint_names"]`.
+        """
+        from stacc.server.rt_channel import ControlChannel
+
+        status = self._post("/v1/runtime/shm", {"enable": True, "mode": mode, "timeout_ms": timeout_ms})
+        return ControlChannel.open(status["path"])
+
+    def disable_shm(self) -> Dict[str, Any]:
+        return self._post("/v1/runtime/shm", {"enable": False})
 
     def gains(self, kp: Optional[float] = None, kd: Optional[float] = None,
               gravity_comp: Optional[bool] = None) -> Dict[str, Any]:

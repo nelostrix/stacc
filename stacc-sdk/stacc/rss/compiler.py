@@ -23,6 +23,7 @@ documented fast-follows):
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
@@ -35,7 +36,7 @@ from stacc.rss.errors import RSSCompileError
 from stacc.rss.parser import parse
 
 ROOT_BLOCK_NAMES = {"body", "chassis"}
-LIMB_BLOCK_NAMES = {"arm", "leg", "wheel", "gripper", "head"}
+LIMB_BLOCK_NAMES = {"arm", "leg", "wheel", "gripper", "head", "rotor"}
 CONTAINER_BLOCK_NAMES = {"actuators"}
 SENSOR_CONTAINER_NAMES = {"sensors"}
 APPEARANCE_CONTAINER_NAMES = {"appearance", "style"}
@@ -65,8 +66,17 @@ class SensorSpec:
     properties: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = False
 
+    @property
+    def name(self) -> str:
+        """Same naming the real drivers use, so telemetry, capabilities and the
+        sensor list treat this inert sensor like any other instead of crashing."""
+        return f"{self.kind}_{self.label}" if self.label else self.kind
+
     def should_update(self, t: float) -> bool:  # pragma: no cover - inert stub
         return False
+
+    def reset(self) -> None:  # pragma: no cover - inert stub
+        return None
 
     def read(self) -> None:  # pragma: no cover - inert stub
         return None
@@ -625,6 +635,178 @@ def _unique_name(base: str, taken: set) -> str:
 # ══════════════════════════════════════════
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Limb mounting. A limb's first joint sits on the surface of the root body
+# (legs underneath, arms/heads on top, wheels on the sides), and each segment
+# hangs *off* its joint along the limb's direction instead of being centred on
+# it — so joints pivot at the segment's end, the way real hardware does. All
+# positions are explicit connection offsets, so MuJoCo (mjcf_builder) and the
+# Studio viewport (serialize_robot) place every part identically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_AXIS_VECTORS = {"x": [1.0, 0.0, 0.0], "y": [0.0, 1.0, 0.0], "z": [0.0, 0.0, 1.0]}
+
+# Default joint axes per limb kind, repeated/truncated to the limb's joint count.
+_DEFAULT_LIMB_AXES = {
+    "arm": ["z", "y", "y", "x", "y", "x"],  # base yaw, shoulder, elbow, wrist roll/pitch/roll
+    "leg": ["x", "y", "y", "y"],  # hip abduction, hip flexion, knee, ankle
+    "head": ["z", "y"],  # pan, tilt
+    "gripper": ["x"],
+}
+
+# Limbs grow up from the top of the body, except legs, which hang down.
+_LIMB_DIRECTION = {"arm": 1.0, "head": 1.0, "gripper": 1.0, "leg": -1.0}
+
+
+def _limb_axes(limb: Block, n: int) -> List[List[float]]:
+    """`axes: [x, y, y];` (or `axis: z;` for a one-joint limb) overrides the
+    per-kind default pattern; unknown entries fall back to the default."""
+    default = _DEFAULT_LIMB_AXES.get(limb.name, ["y", "z"])
+    raw = _prop(limb, "axes")
+    if raw is None and _prop(limb, "axis") is not None:
+        raw = [_prop(limb, "axis")]
+    names: List[str] = []
+    for i in range(n):
+        name = None
+        if isinstance(raw, list) and i < len(raw) and isinstance(raw[i], str):
+            name = raw[i].strip().lower()
+        if name not in _AXIS_VECTORS:
+            name = default[i % len(default)]
+        names.append(name)
+    return [list(_AXIS_VECTORS[a]) for a in names]
+
+
+def _half_extents(geometry: Optional[Geometry]) -> List[float]:
+    if geometry is None:
+        return [0.1, 0.1, 0.1]
+    if geometry.shape == "box":
+        return [float(v) / 2 for v in (geometry.size or [0.2, 0.2, 0.2])]
+    if geometry.shape == "cylinder":
+        r = float(geometry.radius)
+        return [r, r, float(geometry.length) / 2]
+    if geometry.shape == "sphere":
+        r = float(geometry.radius)
+        return [r, r, r]
+    return [0.1, 0.1, 0.1]
+
+
+def _segment_extent(geometry: Geometry) -> float:
+    """Length of a limb segment along its own Z axis."""
+    return 2 * _half_extents(geometry)[2]
+
+
+_SIDE_CODES = {
+    "fl": (1, 1), "fr": (1, -1), "rl": (-1, 1), "rr": (-1, -1),
+    "bl": (-1, 1), "br": (-1, -1), "lf": (1, 1), "rf": (1, -1), "lh": (-1, 1), "rh": (-1, -1),
+}
+
+
+def _label_sides(label: Optional[str]) -> Tuple[int, int]:
+    """(front/rear, left/right) from a limb label like `front_left`, `rear`,
+    `left`, or a short code (`fl`, `rr`, ...). +X is forward and +Y is left
+    (ROS REP 103). 0 means the label doesn't say."""
+    text = (label or "").lower().strip()
+    if text in _SIDE_CODES:
+        return _SIDE_CODES[text]
+    words = set(re.split(r"[_\-\s]+", text))
+    for word in words:  # e.g. `rotor_fl`
+        if word in _SIDE_CODES:
+            return _SIDE_CODES[word]
+    fx = 1 if words & {"front", "fore"} else -1 if words & {"rear", "back", "hind"} else 0
+    fy = 1 if "left" in words else -1 if "right" in words else 0
+    return fx, fy
+
+
+_CORNER_ORDER = [(1, 1), (1, -1), (-1, 1), (-1, -1), (0, 1), (0, -1)]
+
+
+def _vector_prop(block: Block, key: str) -> Optional[List[float]]:
+    raw = _prop(block, key)
+    if isinstance(raw, list) and len(raw) == 3 and all(isinstance(v, (int, float)) for v in raw):
+        return [float(v) for v in raw]
+    return None
+
+
+_SPEED_TO_RAD_S = {"rpm": 2 * math.pi / 60.0, "deg/s": math.pi / 180.0, "rad/s": 1.0, None: 1.0}
+
+
+def _angular_speed(block: Block, *keys: str) -> Optional[float]:
+    """An angular speed property in rad/s (`300rpm`, `180deg/s`, `6rad/s`)."""
+    for key in keys:
+        raw = block.properties.get(key)
+        if isinstance(raw, NumberValue) and raw.unit in _SPEED_TO_RAD_S:
+            return raw.value * _SPEED_TO_RAD_S[raw.unit]
+    return None
+
+
+def _apply_motor(joint: Joint, limb: Block, warnings: List[str]) -> None:
+    """Joint/motor properties from a limb block.
+
+    `effort:` is the motor's stall torque (N·m) and `speed:` its no-load speed.
+    Given both, the joint behaves like a DC motor: available torque falls
+    linearly with speed, τ = τ_cmd − (effort / speed)·ω, so it can't spin up
+    without bound. That speed-dependent term is MuJoCo joint damping, which is
+    integrated implicitly (stable at any value)."""
+    effort = _prop(limb, "effort")
+    if isinstance(effort, (int, float)) and effort > 0:
+        joint.max_effort = float(effort)
+    speed = _angular_speed(limb, "speed", "velocity")
+    if speed is not None and speed > 0:
+        joint.max_velocity = speed
+    damping = _prop(limb, "damping")
+    if isinstance(damping, (int, float)) and damping >= 0:
+        joint.damping = float(damping)
+    friction = _prop(limb, "friction")
+    if isinstance(friction, (int, float)) and friction >= 0:
+        joint.friction = float(friction)
+    limits = _prop(limb, "limits")
+    if (
+        joint.type == "revolute"
+        and isinstance(limits, list)
+        and len(limits) == 2
+        and all(isinstance(v, (int, float)) for v in limits)
+        and limits[0] < limits[1]
+    ):
+        joint.limits = (float(limits[0]), float(limits[1]))
+
+    if speed is not None and speed > 0:
+        if isinstance(effort, (int, float)) and effort > 0:
+            joint.damping += float(effort) / speed  # motor back-EMF
+        else:
+            label = f" {limb.label}" if limb.label else ""
+            message = (
+                f"'{limb.name}{label}' declares speed: but no effort: — the motor's torque-speed "
+                f"curve needs both (stall torque and no-load speed), so speed is only recorded."
+            )
+            if message not in warnings:  # once per limb, not once per segment
+                warnings.append(message)
+
+
+def _limb_mount(limb: Block, index_in_kind: int, root_half: List[float], wheel_half_width: float = 0.0) -> List[float]:
+    """Where a limb's first joint sits, relative to the root body's centre.
+    An explicit `at: [x, y, z];` always wins."""
+    explicit = _vector_prop(limb, "at")
+    if explicit is not None:
+        return explicit
+    hx, hy, hz = root_half
+    fx, fy = _label_sides(limb.label)
+    if limb.name == "leg":
+        if (fx, fy) == (0, 0):
+            fx, fy = _CORNER_ORDER[index_in_kind % len(_CORNER_ORDER)]
+        return [fx * hx * 0.8, fy * hy * 0.8, -hz]
+    if limb.name == "rotor":
+        # On top of the body at its corners (an X layout for four rotors).
+        if (fx, fy) == (0, 0):
+            fx, fy = _CORNER_ORDER[index_in_kind % len(_CORNER_ORDER)]
+        return [fx * hx, fy * hy, hz + 0.01]
+    if limb.name == "wheel":
+        if fy == 0:
+            fy = 1 if index_in_kind % 2 == 0 else -1
+        return [fx * hx * 0.7, fy * (hy + wheel_half_width + 0.005), -hz]
+    # arms, heads, grippers on the body: on top, spread by label
+    return [fx * hx * 0.6, fy * hy * 0.6, hz]
+
+
 def compile_robot(
     robot_def: RobotDef,
     components: Dict[str, ComponentDef],
@@ -672,7 +854,16 @@ def compile_robot(
         shape = None
 
     robot.add_link(root_link)
-    robot.fixed_base = shape not in MOBILE_SHAPES
+    # Anything that walks or rolls is free to move; `base: fixed;` / `base: free;`
+    # on the body (or the robot) says so explicitly.
+    declared_base = (root_block is not None and _prop(root_block, "base")) or _prop(resolved, "base")
+    has_locomotion = any(True for _ in resolved.children_named("leg", "wheel", "rotor")) or any(
+        True for c in resolved.children_named(*CONTAINER_BLOCK_NAMES) for _ in c.children_named("leg", "wheel", "rotor")
+    )
+    if declared_base in ("fixed", "free"):
+        robot.fixed_base = declared_base == "fixed"
+    else:
+        robot.fixed_base = shape not in MOBILE_SHAPES and not has_locomotion
     all_links[root_name] = root_link
     link_kind[root_name] = root_block.name if root_block is not None else "chassis"
     if root_block is not None:
@@ -685,59 +876,159 @@ def compile_robot(
     for container in resolved.children_named(*CONTAINER_BLOCK_NAMES):
         limb_blocks += list(container.children_named(*LIMB_BLOCK_NAMES))
 
+    root_half = _half_extents(root_link.visual)
+    pending_warnings: List[str] = []
+    kind_counts: Dict[str, int] = {}
+    # Distal link of each arm chain, so a gripper can mount on the arm's tip.
+    arm_tips: List[Tuple[Optional[str], str, float]] = []
+    # Arms first, so grippers declared before them can still find a tip.
+    limb_blocks.sort(key=lambda b: 1 if b.name == "gripper" else 0)
+    wheel_labels: List[Optional[str]] = []
+
     for limb in limb_blocks:
         base_name = f"{limb.name}_{limb.label}" if limb.label else limb.name
-        joint_type = "continuous" if limb.name == "wheel" else "revolute"
-        n_joints = _limb_joint_count(limb)
-        segment_lengths = _limb_segment_lengths(limb, n_joints)
+        index_in_kind = kind_counts.get(limb.name, 0)
+        kind_counts[limb.name] = index_in_kind + 1
         limb_meta = _block_metadata(limb)
-
         parent_name = root_name
-        prev_length = 0.0
-        chain_link_names: List[str] = []
-        for seg_idx in range(n_joints):
-            # A single-joint limb keeps the plain "arm_left" name for
-            # backward compatibility; a multi-joint chain numbers its
-            # segments "arm_left_1", "arm_left_2", ...
-            seg_base = f"{base_name}_{seg_idx + 1}" if n_joints > 1 else base_name
-            link_name = _unique_name(seg_base, used_names)
-            used_names.add(link_name)
 
-            seg_length = segment_lengths[seg_idx]
-            link = _block_to_link(limb, link_name, default_length=seg_length)
-            # Alternate rotation axes down the chain so a multi-joint limb
-            # doesn't collapse into redundant parallel hinges.
-            axis = [0.0, 1.0, 0.0] if seg_idx % 2 == 0 else [0.0, 0.0, 1.0]
+        if limb.name == "rotor":
+            # A thin disc on a fixed joint carrying a thrust actuator (see
+            # mjcf_builder): force along the disc's axis, plus the rotor's yaw
+            # reaction torque, whose sign follows its spin direction.
+            link_name = _unique_name(base_name, used_names)
+            used_names.add(link_name)
+            radius = float(_prop(limb, "radius", 0.06))
+            link = _block_to_link(limb, link_name)
+            if _prop(limb, "shape") is None:
+                geometry = Geometry(shape="cylinder", radius=radius, length=0.01)
+                _apply_visual_properties(geometry, _block_metadata(limb))
+                link.visual = link.collision = geometry
+            if not isinstance(_prop(limb, "mass"), (int, float)):
+                link.mass = 0.02
+            if link.visual is not None:
+                link.inertia = _inertia_for_geometry(link.mass, link.visual)
+            fx, fy = _label_sides(limb.label)
+            if (fx, fy) == (0, 0):
+                fx, fy = _CORNER_ORDER[index_in_kind % len(_CORNER_ORDER)]
+            spin = _prop(limb, "spin")
+            if spin not in ("cw", "ccw"):
+                # X-quad convention: front-left and rear-right spin counter-clockwise.
+                spin = "ccw" if fx * fy > 0 else "cw"
+            max_thrust = _prop(limb, "thrust", 5.0)
+            link.thruster = {
+                "max_thrust": float(max_thrust) if isinstance(max_thrust, (int, float)) and max_thrust > 0 else 5.0,
+                "torque_ratio": float(_prop(limb, "torque_ratio", 0.016)),
+                "spin": spin,
+            }
+            joint = Joint(name=f"{link_name}_joint", type="fixed", parent_link=root_name, child_link=link_name)
+            robot.attach(root_name, joint, link, offset=_limb_mount(limb, index_in_kind, root_half))
+            robot.thrusters = list(getattr(robot, "thrusters", [])) + [link_name]
+            chain_link_names = [link_name]
+        elif limb.name == "wheel":
+            # One continuous joint spinning about the lateral (Y) axis; the
+            # cylinder is turned so its own axis lines up with the axle.
+            link_name = _unique_name(base_name, used_names)
+            used_names.add(link_name)
+            radius = float(_prop(limb, "radius", 0.05))
+            width = float(_prop(limb, "width", _prop(limb, "length", 0.04)))
+            link = _block_to_link(limb, link_name)
+            if _prop(limb, "shape") is None:
+                # A wheel is a cylinder unless the file says otherwise.
+                geometry = Geometry(shape="cylinder", radius=radius, length=width)
+                _apply_visual_properties(geometry, _block_metadata(limb))
+                link.visual = link.collision = geometry
+            if link.visual is not None and link.visual.shape == "cylinder":
+                link.visual.origin = [0.0, 0.0, 0.0, math.pi / 2, 0.0, 0.0]
+            link.inertia = _inertia_for_geometry(link.mass, link.visual) if link.visual is not None else link.inertia
             joint = Joint(
                 name=f"{link_name}_joint",
-                type=joint_type,
-                parent_link=parent_name,
+                type="continuous",
+                parent_link=root_name,
                 child_link=link_name,
-                axis=axis,
+                axis=[0.0, 1.0, 0.0],
             )
-            # First segment attaches wherever the parent link's own geometry
-            # implies (offset=None, same as the old single-joint behavior);
-            # each later segment sits `prev_length` along Z from the one
-            # before it, forming an actual serial chain instead of every
-            # segment stacking at the root.
-            offset = None if seg_idx == 0 else [0.0, 0.0, prev_length]
-            robot.attach(parent_name, joint, link, offset=offset)
+            _apply_motor(joint, limb, pending_warnings)
+            mount = _limb_mount(limb, index_in_kind, root_half, wheel_half_width=width / 2)
+            robot.attach(root_name, joint, link, offset=mount)
+            chain_link_names = [link_name]
+            wheel_labels.append(limb.label)
+        else:
+            n_joints = _limb_joint_count(limb)
+            segment_lengths = _limb_segment_lengths(limb, n_joints)
+            axes = _limb_axes(limb, n_joints)
+            direction = _LIMB_DIRECTION.get(limb.name, 1.0)
 
-            all_links[link_name] = link
+            if limb.name == "gripper" and arm_tips and _vector_prop(limb, "at") is None:
+                tip = next((t for t in arm_tips if t[0] == limb.label), arm_tips[0])
+                parent_name, offset = tip[1], [0.0, 0.0, tip[2]]
+            else:
+                offset = _limb_mount(limb, index_in_kind, root_half)
+
+            chain_link_names = []
+            for seg_idx in range(n_joints):
+                # A single-joint limb keeps the plain "arm_left" name for
+                # backward compatibility; a multi-joint chain numbers its
+                # segments "arm_left_1", "arm_left_2", ...
+                seg_base = f"{base_name}_{seg_idx + 1}" if n_joints > 1 else base_name
+                link_name = _unique_name(seg_base, used_names)
+                used_names.add(link_name)
+
+                link = _block_to_link(limb, link_name, default_length=segment_lengths[seg_idx])
+                extent = _segment_extent(link.visual) if link.visual is not None else segment_lengths[seg_idx]
+                if link.visual is not None:
+                    # The segment hangs off its joint along the limb direction.
+                    link.visual.origin = [0.0, 0.0, direction * extent / 2, 0.0, 0.0, 0.0]
+                joint = Joint(
+                    name=f"{link_name}_joint",
+                    type="revolute",
+                    parent_link=parent_name,
+                    child_link=link_name,
+                    axis=axes[seg_idx],
+                )
+                _apply_motor(joint, limb, pending_warnings)
+                robot.attach(parent_name, joint, link, offset=offset)
+                chain_link_names.append(link_name)
+                parent_name = link_name
+                offset = [0.0, 0.0, direction * extent]
+
+            if limb.name == "arm":
+                arm_tips.append((limb.label, chain_link_names[-1], offset[2]))
+
+        for link_name in chain_link_names:
+            all_links[link_name] = robot._links_by_name[link_name]
             metadata[link_name] = limb_meta
             link_kind[link_name] = limb.name
             if limb.label:
                 link_id[link_name] = limb.label
             link_classes[link_name] = _classes_of(limb)
-            chain_link_names.append(link_name)
-            parent_name = link_name
-            prev_length = seg_length
 
         # Sub-blocks of a limb that aren't structural (e.g. head { display{} camera{} })
         # become sensors mounted on the last (distal) segment of the chain.
         end_link_name = chain_link_names[-1]
         for sub in limb.children:
             robot.attach_sensor(_build_sensor(sub), position=end_link_name)
+
+    # A body resting on two side wheels and nothing else tips onto its edge.
+    if len(wheel_labels) == 2 and not any(_label_sides(l)[0] for l in wheel_labels) and "leg" not in kind_counts:
+        pending_warnings.append(
+            "only two wheels, both on the centre line: the body will tip onto its front or rear edge. "
+            "Add front/rear wheels (e.g. `wheel front_left { ... }`) or casters."
+        )
+
+    # Fixed robots stand on the floor; mobile robots spawn just above it instead
+    # of being dropped from height.
+    if robot.fixed_base:
+        robot.spawn_height = root_half[2]
+    else:
+        reach_down = 0.0
+        for limb in limb_blocks:
+            if limb.name == "leg":
+                n = _limb_joint_count(limb)
+                reach_down = max(reach_down, sum(_limb_segment_lengths(limb, n)))
+            elif limb.name == "wheel":
+                reach_down = max(reach_down, float(_prop(limb, "radius", 0.05)))
+        robot.spawn_height = root_half[2] + reach_down + 0.02
 
     # ── sensors { lidar front { ... } camera front { ... } } ──
     for sensors_block in resolved.children_named(*SENSOR_CONTAINER_NAMES):
@@ -769,7 +1060,7 @@ def compile_robot(
         | SENSOR_CONTAINER_NAMES
         | APPEARANCE_CONTAINER_NAMES
     )
-    warnings: List[str] = []
+    warnings: List[str] = list(pending_warnings)
     for child in resolved.children:
         if child.name in recognized_top_level:
             continue

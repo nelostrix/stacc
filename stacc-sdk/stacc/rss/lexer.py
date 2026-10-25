@@ -12,7 +12,7 @@ from stacc.rss.errors import RSSSyntaxError
 
 # Units recognized directly after a number with no space, e.g. "650mm", "1.5m/s".
 # Longest-first so "m/s" is tried before "m".
-_UNITS = ["m/s", "deg/s", "rad/s", "mm", "cm", "m", "kg", "g", "deg", "rad", "hz", "khz"]
+_UNITS = ["rpm", "Nm", "N", "m/s", "deg/s", "rad/s", "mm", "cm", "m", "kg", "g", "deg", "rad", "hz", "khz"]
 
 _PUNCTUATION = {
     "{": "LBRACE",
@@ -105,6 +105,8 @@ class Lexer:
     def _read_number(self) -> Token:
         start_line, start_col = self.line, self.col
         chars: List[str] = []
+        if self._peek() == "-":  # negative literal, e.g. limits: [-90deg, 45deg]
+            chars.append(self._advance())
         while self._peek().isdigit():
             chars.append(self._advance())
         if self._peek() == "." and self._peek(1).isdigit():
@@ -158,7 +160,7 @@ class Lexer:
 
             if ch == '"':
                 tokens.append(self._read_string())
-            elif ch.isdigit():
+            elif ch.isdigit() or (ch == "-" and self._peek(1).isdigit()):
                 tokens.append(self._read_number())
             elif ch == "-" and self._peek(1) == "-":
                 tokens.append(self._read_custom_property())

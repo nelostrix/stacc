@@ -1,0 +1,8 @@
+[package]
+name = "stacc_runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Rust client for the STACC controller runtime API (/v1/runtime/*), std-only."
+license = "MIT"
+
+[dependencies]

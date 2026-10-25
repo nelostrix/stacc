@@ -123,6 +123,14 @@ def _geom_attrs(link, color_index: int, assets: Optional[list] = None) -> dict:
     if getattr(geo, "conaffinity", None) is not None:
         attrs["conaffinity"] = str(geo.conaffinity)
 
+    # A geometry offset from its body frame (e.g. an RSS limb segment that hangs
+    # off its joint, or a wheel turned onto its axle) must keep that offset.
+    origin = list(getattr(geo, "origin", None) or [0, 0, 0, 0, 0, 0]) + [0] * 6
+    if any(abs(float(v)) > 1e-12 for v in origin[:3]):
+        attrs["pos"] = f"{origin[0]} {origin[1]} {origin[2]}"
+    if any(abs(float(v)) > 1e-12 for v in origin[3:6]):
+        attrs["euler"] = f"{origin[3]} {origin[4]} {origin[5]}"
+
     shape = link.visual.shape
 
     if shape == "box":
@@ -184,6 +192,8 @@ def _joint_attrs(joint) -> Optional[dict]:
     # Damping
     if joint.damping > 0:
         attrs["damping"] = str(joint.damping)
+    if getattr(joint, "friction", 0) > 0:
+        attrs["frictionloss"] = str(joint.friction)  # dry (Coulomb) joint friction, N·m
 
     return attrs
 
@@ -242,8 +252,15 @@ def robot_to_mjcf(robot, config) -> str:
     ET.SubElement(root, "compiler", angle="radian")
 
     gx, gy, gz = config.gravity
+    # implicitfast integrates velocity-dependent forces (joint damping and the
+    # servo's -kd·qdot term) implicitly, so stiff joint servos stay stable at a
+    # 1 ms step even on light links.
     ET.SubElement(
-        root, "option", timestep=str(config.timestep), gravity=f"{gx} {gy} {gz}"
+        root,
+        "option",
+        timestep=str(config.timestep),
+        gravity=f"{gx} {gy} {gz}",
+        integrator="implicitfast",
     )
 
     # Populated lazily as bodies are built below, then turned into real
@@ -265,6 +282,7 @@ def robot_to_mjcf(robot, config) -> str:
     joint_order = []  # ordered list of joint names for actuator generation
     visited = set()  # prevent infinite loops
     materials: list = []  # <material> dicts collected from styled links
+    thrusters: list = []  # links carrying a rotor thruster
 
     def _build_body(parent_element, link, joint_for_this, pos_str, is_root=False):
         """Recursively build a body and all its children."""
@@ -287,10 +305,12 @@ def robot_to_mjcf(robot, config) -> str:
                 joint_order.append(joint_for_this.name)
 
         # Inertial
+        geo_origin = list(getattr(link.visual, "origin", None) or [0, 0, 0]) + [0, 0, 0]
         ET.SubElement(
             body,
             "inertial",
-            pos="0 0 0",
+            # Centre of mass at the geometry's centre, wherever it sits on the body.
+            pos=f"{geo_origin[0]} {geo_origin[1]} {geo_origin[2]}",
             mass=str(link.mass),
             diaginertia=(f"{link.inertia.ixx} {link.inertia.iyy} {link.inertia.izz}"),
         )
@@ -299,6 +319,11 @@ def robot_to_mjcf(robot, config) -> str:
         geom_attrs = _geom_attrs(link, color_idx[0], assets=materials)
         color_idx[0] += 1
         ET.SubElement(body, "geom", **geom_attrs)
+
+        # A rotor: thrust is applied at this site, along its +Z axis.
+        if getattr(link, "thruster", None):
+            ET.SubElement(body, "site", name=f"{link.name}_thrust", pos="0 0 0", size="0.005")
+            thrusters.append(link)
 
         # ── Recurse into children ──
         children = robot.get_all_children(link.name)
@@ -322,7 +347,10 @@ def robot_to_mjcf(robot, config) -> str:
     z_offset = 0.5 if robot.fixed_base else 3.0
 
     # Adjust z_offset for robots with legs (need more clearance)
-    if not robot.fixed_base:
+    spawn_height = getattr(robot, "spawn_height", None)
+    if isinstance(spawn_height, (int, float)) and spawn_height > 0:
+        z_offset = float(spawn_height)
+    elif not robot.fixed_base:
         total_height = sum(_get_half_height(l) * 2 for l in robot.links) / max(
             len(robot.links), 1
         )
@@ -339,11 +367,42 @@ def robot_to_mjcf(robot, config) -> str:
 
     # ── Actuators (in joint_order to match MuJoCo's ctrl array) ──
     actuator_el = ET.SubElement(root, "actuator")
+    # One actuator per joint: force = gain·ctrl + bias0 + bias1·q + bias2·qdot.
+    # The backend switches it between direct torque (gain 1, no bias, ctrl =
+    # torque) and a joint servo (gain kp, bias [0, -kp, -kd], ctrl = target),
+    # always limited to the joint's max effort.
     for jname in joint_order:
         jobj = next((j for j in robot.joints if j.name == jname), None)
         effort = jobj.max_effort if jobj else 100.0
         ET.SubElement(
-            actuator_el, "motor", joint=jname, ctrlrange=f"{-effort} {effort}"
+            actuator_el,
+            "general",
+            name=f"{jname}_actuator",
+            joint=jname,
+            gaintype="fixed",
+            gainprm="1",
+            biastype="affine",
+            biasprm="0 0 0",
+            ctrllimited="false",
+            forcelimited="true",
+            forcerange=f"{-effort} {effort}",
+        )
+
+    # Rotor thrusters: ctrl is thrust in newtons (0..max). The gear's last term
+    # is the rotor's yaw reaction torque per newton, opposite to its spin.
+    for link in thrusters:
+        spec = link.thruster
+        yaw = spec["torque_ratio"] * (-1.0 if spec["spin"] == "ccw" else 1.0)
+        ET.SubElement(
+            actuator_el,
+            "general",
+            name=f"{link.name}_thrust",
+            site=f"{link.name}_thrust",
+            gear=f"0 0 1 0 0 {yaw}",
+            gaintype="fixed",
+            gainprm="1",
+            ctrllimited="true",
+            ctrlrange=f"0 {spec['max_thrust']}",
         )
 
     return ET.tostring(root, encoding="unicode")
