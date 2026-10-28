@@ -27,6 +27,7 @@ from stacc.rss.embed import (
     this_file,
 )
 from stacc.rss.errors import RSSCompileError, RSSError, RSSSyntaxError
+from stacc.rss.importer import install as _install_importer, module
 from stacc.rss.parser import parse
 from stacc.rss.ros2_skeleton import write_ros2_package
 
@@ -35,6 +36,7 @@ __all__ = [
     "compile_document",
     "compile_robot",
     "write_ros2_package",
+    "module",
     "rss",
     "this_file",
     "load_file",
@@ -54,3 +56,6 @@ __all__ = [
     "RSSSyntaxError",
     "RSSCompileError",
 ]
+
+# `import stacc.rss` makes .rss files importable: `from design import robot, joints`.
+_install_importer()

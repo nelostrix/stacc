@@ -165,6 +165,39 @@ robot). Errors are reported at the line and column of the host file.
 - Examples: `examples/embedded/scout_rover.py`, `examples/embedded/arm_reach.cpp`,
   `bindings/rust/stacc_runtime/examples/quadruped_crouch.rs`.
 
+## Importing a `.rss` file into Python
+
+Keep the robot in `design.rss` and the behaviour in Python. After
+`import stacc.rss`, a `.rss` file imports like a module — found next to the
+running script, on `sys.path`, or inside a package — and its contents come
+with it:
+
+```python
+import stacc.rss
+from design import robot, joints, classes, components
+
+robot                                   # the compiled Robot
+joints.leg_front_left_1                 # a Joint (also joints["leg_front_left_1"])
+[j.name for j in classes.lead_leg.joints]   # joints of every part with `class: lead_leg;`
+components["servo_leg"]                 # {"joints": 3, "reach": 0.35, ...} in SI units
+```
+
+| Name | What it is |
+|---|---|
+| `robot` | The robot, when the file defines exactly one. |
+| `<robot name>`, `robots` | Every robot, by name. |
+| `joints`, `links`, `sensors` | The robot's parts in compile order; attribute or `["name"]` access, iterable. |
+| `classes` | Each RSS `class:` name → `.links` and `.joints` tagged with it. |
+| `components` | Each `component` definition's own properties, unit-normalized. |
+| `warnings`, `source` | Compile warnings; the file's text. |
+
+- A `.py` module with the same name wins over the `.rss` file.
+- `importlib.reload(design)` recompiles after an edit.
+- A path that isn't a valid module name loads with
+  `stacc.rss.module("./parts/arm-v2.rss")` (relative to the calling file).
+- Syntax and compile errors are raised at import time, with the `.rss`
+  file's line and column.
+
 ## Styling: selectors, variables, cascade
 
 `appearance` / `style` blocks (the two names are aliases) support real

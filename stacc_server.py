@@ -20,7 +20,8 @@ import hashlib
 import signal
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Add STACC SDK to python path.
 #
@@ -530,19 +531,24 @@ def _rss_warning_diagnostics(robot: Any) -> List[Dict[str, Any]]:
 EMBEDDED_RSS_FORMATS = {"py", "python", "cpp", "cc", "cxx", "hpp", "h", "c", "rs", "rust", "embedded"}
 
 
-def _compile_rss(source: str) -> Any:
+def _compile_rss(source: str, file: Optional[str] = None) -> Any:
     """Parse + compile RSS into a stacc Robot. Raises on any failure.
 
     `source` is either plain RSS or a whole Python/C++/Rust file containing
     `<<<RSS>>> ... <<</RSS>>>` block(s); errors from embedded blocks carry the
     host file's line/column, so diagnostics land on the line being edited.
+    `file`, the path the source was read from (or is being edited at), lets
+    cross-file `use "parts.rss:arm";` resolve next to it.
     """
     from stacc.rss import compile_document, compile_embedded, has_embedded_rss, parse
 
+    search_paths = [EXAMPLES_DIR]
+    if isinstance(file, str) and file:
+        search_paths.insert(0, Path(file).expanduser().resolve().parent)
     if has_embedded_rss(source):
-        return compile_embedded(source, search_paths=[EXAMPLES_DIR])
+        return compile_embedded(source, search_paths=search_paths)
     doc = parse(source)
-    return compile_document(doc, search_paths=[EXAMPLES_DIR])
+    return compile_document(doc, search_paths=search_paths)
 
 
 def rss_compile(req: Dict[str, Any]) -> Dict[str, Any]:
@@ -568,7 +574,7 @@ def rss_compile(req: Dict[str, Any]) -> Dict[str, Any]:
             }],
         }
     try:
-        robot = _compile_rss(source)
+        robot = _compile_rss(source, req.get("file"))
     except Exception as e:  # syntax/compile errors carry line/col where available
         result = {"error": str(e), "kind": "compile" if "compile" in e.__class__.__name__.lower() else "syntax"}
         from stacc.rss import RSSSyntaxError
@@ -590,7 +596,7 @@ def rss_load(req: Dict[str, Any]) -> Dict[str, Any]:
 
     source = req.get("source", "")
     try:
-        robot = _compile_rss(source)
+        robot = _compile_rss(source, req.get("file"))
     except RSSSyntaxError as e:
         return {
             "error": e.message, "line": e.line, "col": e.col, "kind": "syntax",

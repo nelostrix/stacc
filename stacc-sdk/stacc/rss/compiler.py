@@ -1074,6 +1074,8 @@ def compile_robot(
         )
 
     robot.rss_metadata = metadata
+    # RSS `class:` names per link, for `from design import classes` (stacc/rss/importer.py).
+    robot.rss_classes = {name: list(cs) for name, cs in link_classes.items() if cs}
     robot.rss_warnings = warnings
     return robot
 
