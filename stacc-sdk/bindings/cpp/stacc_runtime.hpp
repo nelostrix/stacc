@@ -28,6 +28,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <filesystem>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -209,8 +210,11 @@ class Runtime {
       : host_(std::move(host)), port_(port), timeout_s_(timeout_s) {}
 
   // ── lifecycle ──
-  Json load_source(const std::string& source, const std::string& format = "rss") {
-    return post("/v1/runtime/load_project", "{\"format\":" + json_escape(format) + ",\"source\":" + json_escape(source) + "}");
+  // `file`: where the source came from, so `use "parts.rss:x";` resolves next to it.
+  Json load_source(const std::string& source, const std::string& format = "rss", const std::string& file = "") {
+    std::string body = "{\"format\":" + json_escape(format) + ",\"source\":" + json_escape(source);
+    if (!file.empty()) body += ",\"file\":" + json_escape(file);
+    return post("/v1/runtime/load_project", body + "}");
   }
 
   /** Load a `.rss` file, or a C++/Rust/Python file with an RSS block (pass __FILE__). */
@@ -220,7 +224,8 @@ class Runtime {
     std::stringstream buf;
     buf << in.rdbuf();
     size_t dot = path.find_last_of('.');
-    return load_source(buf.str(), dot == std::string::npos ? "rss" : path.substr(dot + 1));
+    return load_source(buf.str(), dot == std::string::npos ? "rss" : path.substr(dot + 1),
+                       std::filesystem::absolute(path).string());
   }
 
   Json start() { return post("/v1/runtime/start", "{}"); }

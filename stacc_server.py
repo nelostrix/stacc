@@ -287,8 +287,11 @@ def live_tune_gains(req: Dict[str, Any]) -> Dict[str, Any]:
 # The Studio reads the file and sends its text; this daemon never opens arbitrary paths.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _robot_from_source(fmt: str, source: str) -> Any:
-    """Parse a model file's text into a stacc Robot. Raises ValueError with a readable message."""
+def _robot_from_source(fmt: str, source: str, file: Optional[str] = None) -> Any:
+    """Parse a model file's text into a stacc Robot. Raises ValueError with a readable message.
+
+    `file` is where the text came from; RSS resolves `use "parts.rss:x";` next to it.
+    """
     fmt = (fmt or "").lower().lstrip(".")
     try:
         if fmt in ("urdf", "xml"):
@@ -303,7 +306,7 @@ def _robot_from_source(fmt: str, source: str) -> Any:
                     fh.write(source)
                 return load_sdf(path)
         if fmt == "rss" or fmt in EMBEDDED_RSS_FORMATS:
-            return _compile_rss(source)
+            return _compile_rss(source, file)
     except Exception as e:  # parser/compiler errors carry useful text
         raise ValueError(str(e) or e.__class__.__name__) from e
     raise ValueError(
@@ -317,7 +320,7 @@ def model_inspect(req: Dict[str, Any]) -> Dict[str, Any]:
     if not STACC_SDK_AVAILABLE:
         return {"error": "The stacc SDK is not available in this daemon."}
     try:
-        robot = _robot_from_source(req.get("format", ""), req.get("source", ""))
+        robot = _robot_from_source(req.get("format", ""), req.get("source", ""), req.get("file"))
     except ValueError as e:
         return {"error": str(e), "kind": "parse"}
 
@@ -382,7 +385,7 @@ def model_convert(req: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "The stacc SDK is not available in this daemon."}
     target = (req.get("to") or "").lower()
     try:
-        robot = _robot_from_source(req.get("format", ""), req.get("source", ""))
+        robot = _robot_from_source(req.get("format", ""), req.get("source", ""), req.get("file"))
     except ValueError as e:
         return {"error": str(e), "kind": "parse"}
     try:
@@ -407,7 +410,7 @@ def robot_load_model(req: Dict[str, Any]) -> Dict[str, Any]:
     if RT is None:
         return {"error": "Live SDK runtime unavailable — cannot load a model into the simulator."}
     try:
-        robot = _robot_from_source(req.get("format", ""), req.get("source", ""))
+        robot = _robot_from_source(req.get("format", ""), req.get("source", ""), req.get("file"))
     except ValueError as e:
         return {"error": str(e), "kind": "parse"}
     try:
@@ -419,12 +422,29 @@ def robot_load_model(req: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": f"The simulator could not load this model: {e}", "kind": "load"}
 
 
+def rss_codegen(req: Dict[str, Any]) -> Dict[str, Any]:
+    """C++ or Rust declarations (joints, links, classes) for an .rss robot — see stacc/rss/codegen.py."""
+    if not STACC_SDK_AVAILABLE:
+        return {"error": "The stacc SDK is not available in this daemon."}
+    lang = str(req.get("lang") or "")
+    try:
+        robot = _robot_from_source("rss", req.get("source", ""), req.get("file"))
+    except ValueError as e:
+        return {"error": str(e), "kind": "parse"}
+    from stacc.rss.codegen import GENERATORS, generate
+
+    if lang not in GENERATORS:
+        return {"error": f"lang must be one of: {', '.join(sorted(GENERATORS))}", "kind": "input"}
+    source_name = os.path.basename(str(req.get("file") or f"{robot.name}.rss"))
+    return {"name": robot.name, "lang": lang, "text": generate(robot, lang, source_name)}
+
+
 def rss_bom(req: Dict[str, Any]) -> Dict[str, Any]:
     """Bill of materials for an .rss robot, as the files the SDK writes (CSV etc.)."""
     if not STACC_SDK_AVAILABLE:
         return {"error": "The stacc SDK is not available in this daemon."}
     try:
-        robot = _robot_from_source("rss", req.get("source", ""))
+        robot = _robot_from_source("rss", req.get("source", ""), req.get("file"))
     except ValueError as e:
         return {"error": str(e), "kind": "parse"}
     import tempfile
@@ -443,7 +463,7 @@ def rss_ros2_package(req: Dict[str, Any]) -> Dict[str, Any]:
     if not STACC_SDK_AVAILABLE:
         return {"error": "The stacc SDK is not available in this daemon."}
     try:
-        robot = _robot_from_source("rss", req.get("source", ""))
+        robot = _robot_from_source("rss", req.get("source", ""), req.get("file"))
     except ValueError as e:
         return {"error": str(e), "kind": "parse"}
     import tempfile
@@ -757,7 +777,7 @@ def runtime_load_project(req: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "Live runtime unavailable", "kind": "runtime"}
     fmt = (req.get("format") or "rss").lower()
     try:
-        robot = _robot_from_source(fmt, req.get("source", ""))
+        robot = _robot_from_source(fmt, req.get("source", ""), req.get("file"))
     except ValueError as e:
         return {"error": str(e), "kind": "parse"}
     try:
@@ -1259,7 +1279,7 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
             result = live_tune_gains(req_data) if RT else fallback_tune_gains(req_data)
             self._send_json(200, result)
 
-        elif self.path in ("/v1/model/inspect", "/v1/model/convert", "/v1/robot/load_model", "/v1/rss/bom", "/v1/rss/ros2_package", "/v1/rss/compile", "/v1/hal/upload_command"):
+        elif self.path in ("/v1/model/inspect", "/v1/model/convert", "/v1/robot/load_model", "/v1/rss/bom", "/v1/rss/ros2_package", "/v1/rss/compile", "/v1/rss/codegen", "/v1/hal/upload_command"):
             handler = {
                 "/v1/model/inspect": model_inspect,
                 "/v1/model/convert": model_convert,
@@ -1267,6 +1287,7 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
                 "/v1/rss/bom": rss_bom,
                 "/v1/rss/ros2_package": rss_ros2_package,
                 "/v1/rss/compile": rss_compile,
+                "/v1/rss/codegen": rss_codegen,
                 "/v1/hal/upload_command": hal_upload_command,
             }[self.path]
             result = handler(req_data)

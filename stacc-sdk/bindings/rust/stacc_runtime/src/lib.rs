@@ -286,9 +286,15 @@ impl Runtime {
     // ── lifecycle ──
 
     pub fn load_source(&mut self, source: &str, format: &str) -> Result<Json> {
+        self.load_source_from(source, format, None)
+    }
+
+    /// Like `load_source`; `file` is where the text came from, so `use "parts.rss:x";` resolves next to it.
+    pub fn load_source_from(&mut self, source: &str, format: &str, file: Option<&str>) -> Result<Json> {
+        let file_part = file.map(|f| format!(",\"file\":{}", json_escape(f))).unwrap_or_default();
         self.post(
             "/v1/runtime/load_project",
-            &format!("{{\"format\":{},\"source\":{}}}", json_escape(format), json_escape(source)),
+            &format!("{{\"format\":{},\"source\":{}{}}}", json_escape(format), json_escape(source), file_part),
         )
     }
 
@@ -296,7 +302,8 @@ impl Runtime {
     pub fn load_file(&mut self, path: &str) -> Result<Json> {
         let source = std::fs::read_to_string(path)?;
         let format = path.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("rss");
-        self.load_source(&source, format)
+        let absolute = std::fs::canonicalize(path).ok().map(|p| p.to_string_lossy().into_owned());
+        self.load_source_from(&source, format, absolute.as_deref())
     }
 
     pub fn start(&mut self) -> Result<Json> {

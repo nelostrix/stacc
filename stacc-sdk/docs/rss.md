@@ -198,6 +198,44 @@ components["servo_leg"]                 # {"joints": 3, "reach": 0.35, ...} in S
 - Syntax and compile errors are raised at import time, with the `.rss`
   file's line and column.
 
+## Using a `.rss` file from C++ and Rust
+
+C++ and Rust load the robot at run time through the bindings — the daemon
+compiles it, so no Python is involved:
+
+```cpp
+stacc::Runtime rt;
+rt.load_file("design.rss");        // `use "parts.rss:x";` resolves next to design.rss
+```
+
+For the names at compile time, generate declarations from the file:
+
+```bash
+python -m stacc.rss.codegen design.rss --lang cpp    # -> design.rss.hpp
+python -m stacc.rss.codegen design.rss --lang rust   # -> design.rss.rs
+```
+
+```cpp
+#include "design.rss.hpp"                           // C++17
+cmd[design::joints::leg_front_left_1_joint] = 0.4;
+for (std::size_t j : design::classes::lead_leg) ...
+```
+
+```rust
+#[path = "design.rss.rs"]
+mod design;
+cmd[design::joints::LEG_FRONT_LEFT_1_JOINT] = 0.4;
+for j in design::classes::LEAD_LEG { ... }
+```
+
+Joint indices follow the runtime's joint order (fixed joints included), so they
+index the command and state arrays of the shared-memory channel directly, and a
+misspelled joint is a compile error. Each file also has `robot_name`, `dof`,
+`joints::count`/`names`, `links`, and one array per RSS `class:`. The daemon
+serves the same output at `POST /v1/rss/codegen {source, file, lang}`.
+NELO Studio regenerates `design.rss.hpp` / `design.rss.rs` whenever
+`design.rss` changes, for any open file that includes it.
+
 ## Styling: selectors, variables, cascade
 
 `appearance` / `style` blocks (the two names are aliases) support real
