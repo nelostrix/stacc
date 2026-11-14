@@ -693,16 +693,20 @@ def get_board(name: str) -> Optional[BoardDefinition]:
     Returns:
         BoardDefinition if found, else None
     """
-    key = name.lower().replace("-", " ").replace("_", " ").strip()
+    def normalize(value: str) -> str:
+        return " ".join(value.lower().replace("-", " ").replace("_", " ").split())
 
-    if key in BOARDS:
-        return BOARDS[key]
-
-    for bname, board in BOARDS.items():
-        if key in bname.lower() or bname.lower() in key:
+    key = normalize(name)
+    if not key:
+        return None
+    # Compare every exact normalized name before considering fuzzy matches:
+    # ESP32-S3 must never resolve to the earlier ESP32 entry.
+    for alias, board in BOARDS.items():
+        if normalize(alias) == key:
             return board
-
-    return None
+    matches = {id(board): board for alias, board in BOARDS.items()
+               if key in normalize(alias)}
+    return next(iter(matches.values())) if len(matches) == 1 else None
 
 
 def list_boards() -> List[BoardDefinition]:
@@ -744,54 +748,67 @@ class FirmwareUploader:
         uploader.upload("firmware.hex")
     """
 
-    UPLOAD_COMMANDS: Dict[str, str] = {
-        "avrdude": "avrdude -p {mcu} -c arduino -P {port} -b {baud} -U flash:w:{firmware}:i",
-        "esptool": "esptool.py --chip {chip} --port {port} --baud {baud} write_flash 0x0 {firmware}",
-        "stlink": "st-flash write {firmware} 0x08000000",
-        "bossac": "bossac --port={port} -U -e -w -b {firmware} -R",
-        "teensy_loader": "teensy_loader_cli --mcu={mcu} -w {firmware}",
-        "uf2": "cp {firmware} /media/*/RPI-RP2/ 2>/dev/null || echo 'Drag {firmware} to RPI-RP2 drive'",
-        "ssh": "scp {firmware} {user}@{host}:{remote_path}",
-        "webusb": "echo 'Upload via browser at microbit.org/code'",
-    }
-
     def __init__(
         self,
         board: str = "arduino_uno",
         port: str = "/dev/ttyACM0",
         baud: int = 115200,
+        flash_address: Optional[int] = None,
     ):
         self.board_def = get_board(board)
         self.port = port
         self.baud = baud
+        if not isinstance(baud, int) or baud <= 0:
+            raise ValueError("baud must be a positive integer")
+        if flash_address is not None and (not isinstance(flash_address, int) or flash_address < 0):
+            raise ValueError("flash_address must be a nonnegative integer")
+        self.flash_address = flash_address
 
         if self.board_def is None:
             raise ValueError(
                 f"Unknown board: {board!r}. Use list_boards() to see available."
             )
 
-    def get_upload_command(self, firmware_path: str) -> str:
-        """Generate the shell command for firmware upload.
+    def get_upload_args(self, firmware_path: str) -> List[str]:
+        """Build a literal argument vector, never a shell program.
 
-        Args:
-            firmware_path: Path to the firmware file
-
-        Returns:
-            Shell command string
+        Only concrete tool-backed providers are supported. Browser/manual,
+        mount-copy and remote uploads must not masquerade as successful echo
+        commands. ESP images require an explicit address for their layout.
         """
+        path = str(firmware_path)
+        if not path or "\0" in path or "\0" in self.port:
+            raise ValueError("Firmware path and port must be valid nonempty arguments")
         method = self.board_def.upload_method
-        template = self.UPLOAD_COMMANDS.get(method, "echo 'No upload method for {board}'")
-        return template.format(
-            firmware=firmware_path,
-            port=self.port,
-            baud=self.baud,
-            mcu=self.board_def.cpu,
-            chip=self.board_def.platform,
-            board=self.board_def.name,
-            user="pi",
-            host="",
-            remote_path="/home/pi/",
+        cpu = self.board_def.cpu
+        if method == "avrdude":
+            targets = {"ATmega328P": ("m328p", "arduino"),
+                       "ATmega2560": ("m2560", "wiring")}
+            if cpu not in targets:
+                raise NotImplementedError(f"No verified avrdude target for {cpu}")
+            mcu, programmer = targets[cpu]
+            return ["avrdude", "-p", mcu, "-c", programmer, "-P", self.port,
+                    "-b", str(self.baud), "-U", f"flash:w:{path}:i"]
+        if method == "esptool":
+            chips = {"ESP32": "esp32", "ESP32-S3": "esp32s3", "ESP8266EX": "esp8266"}
+            if cpu not in chips or self.flash_address is None:
+                raise ValueError("ESP upload requires a supported chip and explicit flash_address for the image layout")
+            return ["esptool.py", "--chip", chips[cpu], "--port", self.port,
+                    "--baud", str(self.baud), "write_flash", hex(self.flash_address), path]
+        if method == "stlink":
+            address = self.flash_address if self.flash_address is not None else 0x08000000
+            return ["st-flash", "write", path, hex(address)]
+        if method == "bossac":
+            return ["bossac", f"--port={self.port}", "-U", "-e", "-w", "-b", path, "-R"]
+        raise NotImplementedError(
+            f"No automatic upload provider for {self.board_def.name} ({method}); "
+            "use the board-specific tool or an enrolled remote deployment provider"
         )
+
+    def get_upload_command(self, firmware_path: str) -> str:
+        """Display-only shell-quoted command. Execution always uses get_upload_args."""
+        import shlex
+        return shlex.join(self.get_upload_args(firmware_path))
 
     def upload(self, firmware_path: str, dry_run: bool = False) -> bool:
         """Upload firmware to the board.
@@ -805,7 +822,13 @@ class FirmwareUploader:
         """
         import subprocess
 
-        cmd = self.get_upload_command(firmware_path)
+        try:
+            args = self.get_upload_args(firmware_path)
+        except (ValueError, NotImplementedError) as exc:
+            print(f"  [firmware] Upload unavailable: {exc}")
+            return False
+        import shlex
+        cmd = shlex.join(args)
         print(f"  [firmware] Uploading to {self.board_def.name}...")
         print(f"  [firmware] Command: {cmd}")
 
@@ -814,7 +837,7 @@ class FirmwareUploader:
 
         try:
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=60
+                args, shell=False, capture_output=True, text=True, timeout=60
             )
             if result.returncode == 0:
                 print("  [firmware] Upload successful")

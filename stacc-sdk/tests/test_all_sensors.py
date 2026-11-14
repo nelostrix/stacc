@@ -12,8 +12,10 @@ import traceback
 results = []
 
 
-def test(name, func):
+def _run_legacy_check(name, func):
     """Run a test function, catch errors, report result."""
+    if __name__ != "__main__":
+        return
     try:
         func()
         results.append((name, "PASS", ""))
@@ -46,7 +48,7 @@ def test_base_sensor():
     assert len(vec) == 3
 
 
-test("BaseSensor", test_base_sensor)
+_run_legacy_check("BaseSensor", test_base_sensor)
 
 
 # ══════════════════════════════════════════
@@ -67,7 +69,7 @@ def test_imu():
     assert len(accel) == 3
 
 
-test("IMU", test_imu)
+_run_legacy_check("IMU", test_imu)
 
 
 # ══════════════════════════════════════════
@@ -86,7 +88,7 @@ def test_ir_array():
     assert -1.0 <= pos <= 1.0
 
 
-test("IRArray", test_ir_array)
+_run_legacy_check("IRArray", test_ir_array)
 
 
 # ══════════════════════════════════════════
@@ -105,7 +107,7 @@ def test_encoder():
     assert "ticks" in data
 
 
-test("Encoder", test_encoder)
+_run_legacy_check("Encoder", test_encoder)
 
 
 # ══════════════════════════════════════════
@@ -127,7 +129,7 @@ def test_lidar():
     assert all(r >= 0 for r in ranges)
 
 
-test("LiDAR (standalone)", test_lidar)
+_run_legacy_check("LiDAR (standalone)", test_lidar)
 
 
 def test_lidar_3d():
@@ -141,7 +143,7 @@ def test_lidar_3d():
     assert len(data["ranges"]) == 16 * 90
 
 
-test("LiDAR 3D (16ch)", test_lidar_3d)
+_run_legacy_check("LiDAR 3D (16ch)", test_lidar_3d)
 
 
 # ══════════════════════════════════════════
@@ -164,7 +166,7 @@ def test_camera():
         assert img.shape == (240, 320, 3)
 
 
-test("Camera (standalone)", test_camera)
+_run_legacy_check("Camera (standalone)", test_camera)
 
 
 # ══════════════════════════════════════════
@@ -187,7 +189,7 @@ def test_depth_camera():
         assert depth.shape == (120, 160)
 
 
-test("DepthCamera (standalone)", test_depth_camera)
+_run_legacy_check("DepthCamera (standalone)", test_depth_camera)
 
 
 # ══════════════════════════════════════════
@@ -206,7 +208,7 @@ def test_stereo():
     assert "baseline" in data
 
 
-test("StereoCamera", test_stereo)
+_run_legacy_check("StereoCamera", test_stereo)
 
 
 # ══════════════════════════════════════════
@@ -229,7 +231,7 @@ def test_force_torque():
     assert len(f) == 3
 
 
-test("ForceTorqueSensor", test_force_torque)
+_run_legacy_check("ForceTorqueSensor", test_force_torque)
 
 
 # ══════════════════════════════════════════
@@ -249,7 +251,7 @@ def test_gps():
     assert abs(data["longitude"] - 80.9) < 1.0
 
 
-test("GPS", test_gps)
+_run_legacy_check("GPS", test_gps)
 
 
 # ══════════════════════════════════════════
@@ -268,7 +270,7 @@ def test_ultrasonic():
     assert isinstance(dist, float)
 
 
-test("Ultrasonic", test_ultrasonic)
+_run_legacy_check("Ultrasonic", test_ultrasonic)
 
 
 # ══════════════════════════════════════════
@@ -286,7 +288,7 @@ def test_contact():
     assert cs.is_touching == False  # no force applied
 
 
-test("ContactSensor", test_contact)
+_run_legacy_check("ContactSensor", test_contact)
 
 
 # ══════════════════════════════════════════
@@ -306,7 +308,7 @@ def test_barometer():
     assert 90000 < data["pressure"] < 110000
 
 
-test("Barometer", test_barometer)
+_run_legacy_check("Barometer", test_barometer)
 
 
 # ══════════════════════════════════════════
@@ -325,7 +327,7 @@ def test_temperature():
     assert -50 < data["temperature"] < 150
 
 
-test("TemperatureSensor", test_temperature)
+_run_legacy_check("TemperatureSensor", test_temperature)
 
 
 # ══════════════════════════════════════════
@@ -367,7 +369,7 @@ def test_lidar_mujoco():
     assert min_range < 10.0, f"LiDAR didn't detect obstacle: min range = {min_range}"
 
 
-test("LiDAR + MuJoCo raycasting", test_lidar_mujoco)
+_run_legacy_check("LiDAR + MuJoCo raycasting", test_lidar_mujoco)
 
 
 # ══════════════════════════════════════════
@@ -406,7 +408,7 @@ def test_camera_mujoco():
     assert img.max() > 0, "Camera rendered all-black image"
 
 
-test("Camera + MuJoCo rendering", test_camera_mujoco)
+_run_legacy_check("Camera + MuJoCo rendering", test_camera_mujoco)
 
 
 # ══════════════════════════════════════════
@@ -443,7 +445,7 @@ def test_robot_with_sensors():
         assert isinstance(data, dict)
 
 
-test("Robot with multiple sensors", test_robot_with_sensors)
+_run_legacy_check("Robot with multiple sensors", test_robot_with_sensors)
 
 
 # ══════════════════════════════════════════
@@ -468,4 +470,5 @@ else:
             print(f"    {err}")
 
 print("=" * 60 + "\n")
-sys.exit(1 if failed > 0 else 0)
+if __name__ == "__main__":
+    sys.exit(1 if failed > 0 else 0)

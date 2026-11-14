@@ -86,121 +86,85 @@ class AccelerationLimiter:
 
 
 class SCurveProfile:
-    """S-curve velocity profile generator.
+    """Analytic seven-segment, rest-to-rest jerk-limited position profile.
 
-    Generates a smooth trajectory from current position to target with
-    bounded velocity, acceleration, and jerk. Produces a continuous
-    acceleration profile (trapezoidal acceleration, not just trapezoidal velocity).
-
-    Args:
-        max_velocity: Maximum velocity.
-        max_acceleration: Maximum acceleration.
-        max_jerk: Maximum jerk (rate of change of acceleration).
+    Limits are finite positive magnitudes. Retargeting a moving profile is
+    rejected: finish the current move or explicitly reset before planning a
+    new rest-to-rest move. Sampling evaluates the analytic trajectory rather
+    than accumulating integration error or snapping an overshoot to target.
     """
 
-    def __init__(
-        self,
-        max_velocity: float = 1.0,
-        max_acceleration: float = 1.0,
-        max_jerk: float = 10.0,
-    ):
-        self.max_vel = max_velocity
-        self.max_accel = max_acceleration
-        self.max_jerk = max_jerk
-        self._pos: float = 0.0
-        self._vel: float = 0.0
-        self._accel: float = 0.0
-        self._target: Optional[float] = None
-        self._t_accel: float = max_acceleration / max_jerk if max_jerk > 0 else 0
-        self._t_const: float = 0.0
-        self._t_decel: float = self._t_accel
-        self._total_time: float = 0.0
-        self._phase: str = "idle"
+    def __init__(self, max_velocity: float = 1.0,
+                 max_acceleration: float = 1.0, max_jerk: float = 10.0):
+        for name, value in (("max_velocity", max_velocity),
+                            ("max_acceleration", max_acceleration),
+                            ("max_jerk", max_jerk)):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and greater than zero")
+        self.max_vel = float(max_velocity)
+        self.max_accel = float(max_acceleration)
+        self.max_jerk = float(max_jerk)
+        self.reset()
 
     def set_target(self, target: float):
-        """Set a new target position and compute the profile.
-
-        Args:
-            target: Desired position.
-        """
-        self._target = target
-        distance = target - self._pos
-
-        if abs(distance) < 1e-10:
-            self._phase = "idle"
+        if not math.isfinite(target):
+            raise ValueError("target must be finite")
+        if not self.is_idle:
+            if target == self._target:
+                return
+            raise RuntimeError("Finish or reset the moving profile before retargeting")
+        self._target = float(target)
+        self._start = self._pos
+        distance = abs(self._target - self._start)
+        if distance == 0:
             return
-
-        sign = 1 if distance > 0 else -1
-        d = abs(distance)
-
-        # Time to reach max velocity with S-curve acceleration
-        t_ramp = self._t_accel * 2  # ramp up + ramp down of acceleration
-        v_max_reachable = self.max_accel * self._t_accel
-        dist_during_ramp = v_max_reachable * t_ramp
-
-        if d <= dist_during_ramp:
-            # Triangle profile (never reaches full velocity)
-            # Solve for peak velocity
-            peak_v = math.sqrt(d * self.max_jerk * self._t_accel)
-            t_ramp = peak_v / self.max_accel if self.max_accel > 0 else 0
-            self._t_accel = t_ramp
-            self._t_const = 0.0
-            self._t_decel = t_ramp
+        self._sign = 1.0 if self._target > self._start else -1.0
+        jerk = self.max_jerk
+        ramp = min(self.max_accel / jerk, math.sqrt(self.max_vel / jerk))
+        plateau = max(0.0, self.max_vel / (jerk * ramp) - ramp)
+        peak_velocity = jerk * ramp * (ramp + plateau)
+        ramp_distance = peak_velocity * (2 * ramp + plateau)
+        cruise = 0.0
+        if distance >= ramp_distance:
+            cruise = (distance - ramp_distance) / peak_velocity
         else:
-            # Trapezoidal profile
-            const_dist = d - dist_during_ramp
-            self._t_const = const_dist / v_max_reachable if v_max_reachable > 0 else 0
-
-        self._total_time = self._t_accel + self._t_const + self._t_decel
-        self._phase = "accelerating"
+            ramp = self.max_accel / jerk
+            if distance < 2 * jerk * ramp ** 3:
+                ramp = (distance / (2 * jerk)) ** (1.0 / 3.0)
+                plateau = 0.0
+            else:
+                plateau = max(0.0, (math.sqrt(ramp ** 2 + 4 * distance / self.max_accel) - 3 * ramp) / 2)
+        self._segments = list(zip(
+            (ramp, plateau, ramp, cruise, ramp, plateau, ramp),
+            (jerk, 0.0, -jerk, 0.0, -jerk, 0.0, jerk),
+        ))
+        self._total_time = sum(duration for duration, _ in self._segments)
         self._elapsed = 0.0
-        self._sign = sign
+        self._phase = "moving"
 
     def compute(self, dt: float) -> float:
-        """Step the profile forward by dt seconds.
-
-        Args:
-            dt: Time step.
-
-        Returns:
-            Current position after stepping.
-        """
-        if self._phase == "idle" or self._target is None:
+        if not math.isfinite(dt) or dt < 0:
+            raise ValueError("dt must be finite and nonnegative")
+        if self.is_idle or dt == 0:
             return self._pos
-
-        self._elapsed += dt
+        self._elapsed = min(self._total_time, self._elapsed + dt)
+        remaining = self._elapsed
+        position = velocity = acceleration = 0.0
+        for duration, jerk in self._segments:
+            t = min(duration, remaining)
+            position += velocity * t + acceleration * t * t / 2 + jerk * t ** 3 / 6
+            velocity += acceleration * t + jerk * t * t / 2
+            acceleration += jerk * t
+            remaining = max(0.0, remaining - t)
+            if remaining == 0:
+                break
+        self._pos = self._start + self._sign * position
+        self._vel = self._sign * velocity
+        self._accel = self._sign * acceleration
         if self._elapsed >= self._total_time:
             self._pos = self._target
-            self._vel = 0.0
-            self._accel = 0.0
+            self._vel = self._accel = 0.0
             self._phase = "idle"
-            return self._pos
-
-        t = self._elapsed
-        t1 = self._t_accel
-        t2 = t1 + self._t_const
-        t3 = self._total_time
-        s = self._sign
-
-        if t <= t1:
-            # Accelerating phase: jerk-limited increase
-            j = self.max_jerk * s
-            self._accel = j * t
-            self._vel = 0.5 * j * t * t
-            self._pos += self._vel * dt
-        elif t <= t2:
-            # Constant velocity phase
-            self._accel = self.max_accel * s
-            self._vel = self.max_accel * self._t_accel * s
-            self._pos += self._vel * dt
-        else:
-            # Decelerating phase: jerk-limited decrease
-            t_dec = t - t2
-            j = -self.max_jerk * s
-            self._accel = self.max_accel * s + j * t_dec
-            self._vel = (self.max_accel * self._t_accel - 0.5 * j * t_dec * t_dec) * s
-            self._pos += self._vel * dt
-
         return self._pos
 
     @property
@@ -220,9 +184,10 @@ class SCurveProfile:
         return self._phase == "idle"
 
     def reset(self, position: float = 0.0):
-        self._pos = position
-        self._vel = 0.0
-        self._accel = 0.0
-        self._target = None
+        if not math.isfinite(position):
+            raise ValueError("position must be finite")
+        self._pos = self._start = float(position)
+        self._vel = self._accel = self._elapsed = self._total_time = 0.0
+        self._target: Optional[float] = None
+        self._segments = []
         self._phase = "idle"
-        self._elapsed = 0.0

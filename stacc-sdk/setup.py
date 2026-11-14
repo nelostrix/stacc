@@ -9,8 +9,11 @@ setup(
     author="stacc robotics",
     url="https://github.com/stacc-robotics/stacc",
     packages=find_packages(),
-    python_requires=">=3.8",
+    python_requires=">=3.10",
+    install_requires=["numpy>=1.24.0", "PyYAML>=6.0"],
     extras_require={
+        "test": ["pytest>=8.0", "scipy>=1.10"],
+        "hal": ["pyserial>=3.5", "smbus2>=0.4.0"],
         "sim": ["mujoco>=3.0.0", "glfw>=2.6.0"],
         "server": ["fastapi>=0.110.0", "uvicorn>=0.29.0", "websockets>=12.0"],
         "deploy": ["paramiko>=3.0.0"],

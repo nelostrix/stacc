@@ -42,6 +42,7 @@ weakly-ordered CPUs.
 from __future__ import annotations
 
 import mmap
+import math
 import os
 import struct
 import time
@@ -116,6 +117,10 @@ class ControlChannel:
 
     @classmethod
     def create(cls, path: str, n_joints: int, n_thrusters: int = 0, mode: int = MODE_REALTIME) -> "ControlChannel":
+        if int(n_joints) < 0 or int(n_thrusters) < 0:
+            raise ValueError("joint and thruster counts cannot be negative")
+        if int(mode) not in (MODE_REALTIME, MODE_LOCKSTEP):
+            raise ValueError("mode must be MODE_REALTIME or MODE_LOCKSTEP")
         state_off = HEADER_SIZE
         cmd_off = state_off + _state_size(n_joints, n_thrusters)
         size = cmd_off + _command_size(n_joints, n_thrusters)
@@ -228,10 +233,18 @@ class ControlChannel:
 
     def write_command(self, kind: int, values: Sequence[float], answers_step: int,
                       thrust: Optional[Sequence[float]] = None) -> int:
+        if kind not in (KIND_POSITION, KIND_TORQUE):
+            raise ValueError("kind must be KIND_POSITION or KIND_TORQUE")
+        if int(answers_step) < 0:
+            raise ValueError("answers_step cannot be negative")
         if len(values) != self.n_joints:
             raise ValueError(f"expected {self.n_joints} joint values, got {len(values)}")
         if thrust is not None and len(thrust) != self.n_thrusters:
             raise ValueError(f"expected {self.n_thrusters} thrust values, got {len(thrust)}")
+        if not all(math.isfinite(float(value)) for value in values):
+            raise ValueError("command values must be finite")
+        if thrust is not None and not all(math.isfinite(float(value)) for value in thrust):
+            raise ValueError("thrust values must be finite")
         off = self._cmd_off
         self._next_cmd_id = max(self._next_cmd_id, _U64.unpack_from(self._mm, off + 8)[0]) + 1
         seq = self._begin_write(off)

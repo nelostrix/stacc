@@ -43,6 +43,10 @@ class StereoCamera(BaseSensor):
         self.left.set_mujoco_backend(model, data)
         self.right.set_mujoco_backend(model, data)
 
+    def close_renderer(self):
+        self.left.close_renderer()
+        self.right.close_renderer()
+
     def read(self) -> Dict[str, Any]:
         left_data = self.left.read()
         right_data = self.right.read()

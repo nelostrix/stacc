@@ -8,7 +8,9 @@ results = []
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
 
-def test(name, func):
+def _run_legacy_check(name, func):
+    if __name__ != "__main__":
+        return
     try:
         func()
         results.append((name, "PASS"))
@@ -39,7 +41,7 @@ def test_lexer_tokens():
     assert toks[-1].kind == "EOF"
 
 
-test("Lexer — units, strings, arrays", test_lexer_tokens)
+_run_legacy_check("Lexer — units, strings, arrays", test_lexer_tokens)
 
 
 def test_lexer_comments_and_errors():
@@ -56,7 +58,7 @@ def test_lexer_comments_and_errors():
         pass
 
 
-test("Lexer — comments + syntax errors", test_lexer_comments_and_errors)
+_run_legacy_check("Lexer — comments + syntax errors", test_lexer_comments_and_errors)
 
 # ═══════ PARSER ═══════
 
@@ -89,7 +91,7 @@ def test_parser_nested_blocks():
     assert lidar.properties["model"] == "rplidar-a2"
 
 
-test("Parser — nested blocks, labels, arrays", test_parser_nested_blocks)
+_run_legacy_check("Parser — nested blocks, labels, arrays", test_parser_nested_blocks)
 
 
 def test_parser_component_and_use():
@@ -109,7 +111,7 @@ def test_parser_component_and_use():
     assert robot_block.uses == ["industrial-arm"]
 
 
-test("Parser — component defs + use directive", test_parser_component_and_use)
+_run_legacy_check("Parser — component defs + use directive", test_parser_component_and_use)
 
 # ═══════ COMPILER ═══════
 
@@ -146,7 +148,7 @@ def test_compile_warehouse_bot():
     assert by_kind["lidar"].range_max == 12.0  # "12m" normalized to meters
 
 
-test("Compiler — warehouse_bot.rss -> Robot", test_compile_warehouse_bot)
+_run_legacy_check("Compiler — warehouse_bot.rss -> Robot", test_compile_warehouse_bot)
 
 
 def test_compile_multi_dof_limb():
@@ -174,7 +176,7 @@ def test_compile_multi_dof_limb():
             assert abs(link.visual.size[2] - 0.15) < 1e-9
 
 
-test("Compiler — multi-DOF limb synthesis (arm_6dof.rss)", test_compile_multi_dof_limb)
+_run_legacy_check("Compiler — multi-DOF limb synthesis (arm_6dof.rss)", test_compile_multi_dof_limb)
 
 
 def test_compile_use_merge():
@@ -198,7 +200,7 @@ def test_compile_use_merge():
     assert "gripper" in link_names
 
 
-test("Compiler — component/use merge (factorybot.rss)", test_compile_use_merge)
+_run_legacy_check("Compiler — component/use merge (factorybot.rss)", test_compile_use_merge)
 
 
 def test_compile_cross_file_use():
@@ -224,7 +226,7 @@ def test_compile_cross_file_use():
     assert robot.rss_metadata["__appearance__"]["accent"]["color"] == "#FF5500"
 
 
-test("Compiler — cross-file `use \"file.rss:name\";`", test_compile_cross_file_use)
+_run_legacy_check("Compiler — cross-file `use \"file.rss:name\";`", test_compile_cross_file_use)
 
 
 def test_unrecognized_block_warns_but_keeps_metadata():
@@ -241,7 +243,7 @@ def test_unrecognized_block_warns_but_keeps_metadata():
     assert robot.rss_metadata["navigation"]["max_speed"] == 1.5  # "1.5m/s" passthrough
 
 
-test(
+_run_legacy_check(
     "Compiler — unrecognized block warns, keeps metadata (not silently dropped)",
     test_unrecognized_block_warns_but_keeps_metadata,
 )
@@ -260,7 +262,7 @@ def test_compile_unknown_use_raises():
         pass
 
 
-test("Compiler — unknown `use` target raises", test_compile_unknown_use_raises)
+_run_legacy_check("Compiler — unknown `use` target raises", test_compile_unknown_use_raises)
 
 # ═══════ URDF EXPORT ═══════
 
@@ -283,7 +285,7 @@ def test_urdf_roundtrip():
     assert reloaded.num_joints == robot.num_joints
 
 
-test("URDF export — round-trips through load_urdf_string", test_urdf_roundtrip)
+_run_legacy_check("URDF export — round-trips through load_urdf_string", test_urdf_roundtrip)
 
 
 def test_sdf_roundtrip():
@@ -307,7 +309,7 @@ def test_sdf_roundtrip():
         sdf_path.unlink(missing_ok=True)
 
 
-test("SDF export — round-trips through load_sdf", test_sdf_roundtrip)
+_run_legacy_check("SDF export — round-trips through load_sdf", test_sdf_roundtrip)
 
 
 def test_mjcf_export_loads_in_mujoco():
@@ -326,7 +328,7 @@ def test_mjcf_export_loads_in_mujoco():
     assert model.njnt >= robot.num_joints
 
 
-test("MJCF export — loads as a real MuJoCo model", test_mjcf_export_loads_in_mujoco)
+_run_legacy_check("MJCF export — loads as a real MuJoCo model", test_mjcf_export_loads_in_mujoco)
 
 
 def test_ros2_package_skeleton():
@@ -359,7 +361,7 @@ def test_ros2_package_skeleton():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-test("ROS2 skeleton — package.xml/urdf/launch/controllers.yaml written", test_ros2_package_skeleton)
+_run_legacy_check("ROS2 skeleton — package.xml/urdf/launch/controllers.yaml written", test_ros2_package_skeleton)
 
 
 def test_stl_export_watertight():
@@ -392,7 +394,7 @@ def test_stl_export_watertight():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-test("STL export — real, watertight meshes per link (quadruped.rss)", test_stl_export_watertight)
+_run_legacy_check("STL export — real, watertight meshes per link (quadruped.rss)", test_stl_export_watertight)
 
 
 def test_bom_generation():
@@ -426,7 +428,7 @@ def test_bom_generation():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-test("BOM generation — real rows from links/joints/sensors, CSV round-trips", test_bom_generation)
+_run_legacy_check("BOM generation — real rows from links/joints/sensors, CSV round-trips", test_bom_generation)
 
 
 def test_control_script_template_is_valid_python():
@@ -445,7 +447,7 @@ def test_control_script_template_is_valid_python():
     assert "pin_a=None,  # TODO" in script
 
 
-test(
+_run_legacy_check(
     "rss deploy — generated control script is valid Python with wiring TODOs",
     test_control_script_template_is_valid_python,
 )
@@ -466,7 +468,7 @@ def test_style_lexer_new_tokens():
     assert custom.value == "--x"
 
 
-test("Style lexer — CUSTOM_PROP / # / . / ( ) / = tokens", test_style_lexer_new_tokens)
+_run_legacy_check("Style lexer — CUSTOM_PROP / # / . / ( ) / = tokens", test_style_lexer_new_tokens)
 
 
 def test_style_parser_selectors_and_vars():
@@ -496,7 +498,7 @@ def test_style_parser_selectors_and_vars():
     assert by_name['sensor[type]'].selector.attr == ("type", "camera")
 
 
-test("Style parser — #id / .class / attr[x=\"y\"] / --vars all parse", test_style_parser_selectors_and_vars)
+_run_legacy_check("Style parser — #id / .class / attr[x=\"y\"] / --vars all parse", test_style_parser_selectors_and_vars)
 
 
 def test_style_variables_resolve_and_error_when_undefined():
@@ -529,7 +531,7 @@ def test_style_variables_resolve_and_error_when_undefined():
         assert "--never-declared" in str(e)
 
 
-test("Style variables — var() resolves; undefined var is a real compile error", test_style_variables_resolve_and_error_when_undefined)
+_run_legacy_check("Style variables — var() resolves; undefined var is a real compile error", test_style_variables_resolve_and_error_when_undefined)
 
 
 def test_style_element_type_selector_applies_to_every_matching_link():
@@ -552,7 +554,7 @@ def test_style_element_type_selector_applies_to_every_matching_link():
     assert all(l.visual.color == [0.0, 1.0, 0.0, 1.0] for l in leg_links)
 
 
-test("Style element-type selector — bare 'leg { }' colors every leg segment", test_style_element_type_selector_applies_to_every_matching_link)
+_run_legacy_check("Style element-type selector — bare 'leg { }' colors every leg segment", test_style_element_type_selector_applies_to_every_matching_link)
 
 
 def test_style_id_selector_targets_whole_limb_chain():
@@ -577,7 +579,7 @@ def test_style_id_selector_targets_whole_limb_chain():
         assert by_name[f"arm_right_arm_{i}"].visual.color == [0.2, 0.2, 0.2, 1.0]
 
 
-test("Style #id selector — targets every segment of one labeled limb chain", test_style_id_selector_targets_whole_limb_chain)
+_run_legacy_check("Style #id selector — targets every segment of one labeled limb chain", test_style_id_selector_targets_whole_limb_chain)
 
 
 def test_style_specificity_beats_source_order():
@@ -602,7 +604,7 @@ def test_style_specificity_beats_source_order():
     assert arm_link.visual.color == [1.0, 0.0, 0.0, 1.0]
 
 
-test("Style cascade — higher specificity (#id) wins even when written first", test_style_specificity_beats_source_order)
+_run_legacy_check("Style cascade — higher specificity (#id) wins even when written first", test_style_specificity_beats_source_order)
 
 
 def test_style_class_selector_and_sensor_attribute_selector():
@@ -634,7 +636,7 @@ def test_style_class_selector_and_sensor_attribute_selector():
     assert by_kind["lidar"].properties["color"] == "green"
 
 
-test("Style .class + sensor[attr=\"value\"] selectors — classes and sensor attrs both match", test_style_class_selector_and_sensor_attribute_selector)
+_run_legacy_check("Style .class + sensor[attr=\"value\"] selectors — classes and sensor attrs both match", test_style_class_selector_and_sensor_attribute_selector)
 
 
 def test_style_joint_element_selector_writes_joint_metadata():
@@ -657,7 +659,7 @@ def test_style_joint_element_selector_writes_joint_metadata():
         assert robot.rss_metadata[f"joint:{name}"] == {"material": "steel"}
 
 
-test("Style joint element selector — writes material metadata for every joint", test_style_joint_element_selector_writes_joint_metadata)
+_run_legacy_check("Style joint element selector — writes material metadata for every joint", test_style_joint_element_selector_writes_joint_metadata)
 
 
 def test_style_legacy_exact_name_matching_still_works():
@@ -679,7 +681,7 @@ def test_style_legacy_exact_name_matching_still_works():
     assert all(l.name == "base" or l.visual.color == [0.7, 0.7, 0.7, 1.0] for l in robot.links)
 
 
-test("Style backward-compat — existing examples' exact-name appearance blocks unchanged", test_style_legacy_exact_name_matching_still_works)
+_run_legacy_check("Style backward-compat — existing examples' exact-name appearance blocks unchanged", test_style_legacy_exact_name_matching_still_works)
 
 
 def test_style_named_css_colors():
@@ -695,7 +697,7 @@ def test_style_named_css_colors():
     assert robot.links[0].visual.color == [1.0, 0.0, 0.0, 1.0]
 
 
-test("Named CSS colors — \"red\" resolves without requiring hex", test_style_named_css_colors)
+_run_legacy_check("Named CSS colors — \"red\" resolves without requiring hex", test_style_named_css_colors)
 
 # ═══════ MATERIALS: metallic/roughness/emission actually render ═══════
 
@@ -711,7 +713,7 @@ def test_material_preset_sets_real_pbr_fields():
     assert geo.color == [0.75, 0.76, 0.78, 1.0]
 
 
-test("material: preset — sets real color/metallic/roughness, not just a metadata label", test_material_preset_sets_real_pbr_fields)
+_run_legacy_check("material: preset — sets real color/metallic/roughness, not just a metadata label", test_material_preset_sets_real_pbr_fields)
 
 
 def test_explicit_properties_override_material_preset():
@@ -728,7 +730,7 @@ def test_explicit_properties_override_material_preset():
     assert geo.metallic == 0.9  # still from the aluminum preset
 
 
-test("Explicit color wins over a material: preset's color; preset's metallic/roughness still apply", test_explicit_properties_override_material_preset)
+_run_legacy_check("Explicit color wins over a material: preset's color; preset's metallic/roughness still apply", test_explicit_properties_override_material_preset)
 
 
 def test_style_rule_sets_metallic_roughness_emission_for_real():
@@ -750,7 +752,7 @@ def test_style_rule_sets_metallic_roughness_emission_for_real():
     assert geo.emission == [0.0, 1.0, 2 / 3]
 
 
-test("Style rule metallic/roughness/emission — actually mutate the Geometry, not just metadata", test_style_rule_sets_metallic_roughness_emission_for_real)
+_run_legacy_check("Style rule metallic/roughness/emission — actually mutate the Geometry, not just metadata", test_style_rule_sets_metallic_roughness_emission_for_real)
 
 
 def test_transparency_and_opacity_adjust_alpha():
@@ -768,7 +770,7 @@ def test_transparency_and_opacity_adjust_alpha():
     assert opaque_override.links[0].visual.color == [0.0, 1.0, 0.0, 0.4]
 
 
-test("transparency:/opacity: — adjust the real alpha channel of the already-set color", test_transparency_and_opacity_adjust_alpha)
+_run_legacy_check("transparency:/opacity: — adjust the real alpha channel of the already-set color", test_transparency_and_opacity_adjust_alpha)
 
 
 def test_mjcf_export_uses_real_declared_color_and_material_asset():
@@ -808,7 +810,7 @@ def test_mjcf_export_uses_real_declared_color_and_material_asset():
     assert round(float(model.mat_shininess[1]), 2) == 0.9  # 1 - roughness(0.1)
 
 
-test("MJCF export — real declared color/material, not a rainbow placeholder (regression)", test_mjcf_export_uses_real_declared_color_and_material_asset)
+_run_legacy_check("MJCF export — real declared color/material, not a rainbow placeholder (regression)", test_mjcf_export_uses_real_declared_color_and_material_asset)
 
 
 def test_sdf_export_includes_real_pbr_block():
@@ -823,7 +825,7 @@ def test_sdf_export_includes_real_pbr_block():
     assert "<pbr>" in sdf_xml and "<metalness>0.9</metalness>" in sdf_xml
 
 
-test("SDF export — real <pbr><metal> block for metallic/roughness (Gazebo has a real PBR model, unlike URDF)", test_sdf_export_includes_real_pbr_block)
+_run_legacy_check("SDF export — real <pbr><metal> block for metallic/roughness (Gazebo has a real PBR model, unlike URDF)", test_sdf_export_includes_real_pbr_block)
 
 # ═══════ SUMMARY ═══════
 
@@ -838,4 +840,5 @@ else:
         f"  \033[92m{passed} passed\033[0m, \033[91m{failed} failed\033[0m out of {total}"
     )
 print("=" * 60 + "\n")
-sys.exit(1 if failed > 0 else 0)
+if __name__ == "__main__":
+    sys.exit(1 if failed > 0 else 0)

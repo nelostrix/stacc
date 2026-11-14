@@ -34,6 +34,13 @@ stacc deploy 192.168.1.100                  # Deploy to hardware
 
 **stacc is to robotics what CUDA is to GPU computing** — a platform that makes the entire pipeline 10x easier.
 
+> **Implementation scope:** STACC is an alpha SDK. Simulation and the Python
+> control runtime are usable on supported configurations, but the product is
+> not yet a universal hardware deployment platform or hard real-time system.
+> Board catalog entries and CLI targets do not guarantee verified upload or
+> physical-device support. See [`stacc-sdk/docs/status.md`](stacc-sdk/docs/status.md)
+> and [`stacc-sdk/docs/runtime-safety.md`](stacc-sdk/docs/runtime-safety.md).
+
 ### How stacc compares
 
 | Feature | ROS 2 | Isaac Sim | stacc |

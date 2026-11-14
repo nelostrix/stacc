@@ -1104,6 +1104,7 @@ def cmd_serve(args):
         hz=args.hz,
         timestep=args.timestep,
         fastapi=args.fastapi,
+        command_timeout=args.command_timeout,
     )
 
 
@@ -1596,6 +1597,8 @@ Templates: blank, line_follower, arm_6dof, quadruped, rover, drone
                          choices=["mujoco", "internal"], help="Physics backend")
     p_serve.add_argument("--hz", type=float, default=60.0, help="Telemetry loop rate (Hz)")
     p_serve.add_argument("--timestep", type=float, default=0.001, help="Physics timestep (s)")
+    p_serve.add_argument("--command-timeout", type=float, default=None,
+                         help="Stop actuator commands after this many seconds without a fresh command")
     p_serve.add_argument("--fastapi", action="store_true",
                          help="Use FastAPI + WebSocket instead of the stdlib bridge")
     

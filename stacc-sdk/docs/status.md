@@ -10,6 +10,19 @@ stacc is The Universal Robotics Development Platform — a unified platform to i
 
 ## What's Completed
 
+### Live runtime safety and timing
+- Monotonic absolute control-loop schedule with measured deadline misses
+- Fractional fixed-step physics scheduling without systematic period drift
+- Strict finite-value, actuator-count, joint-limit, effort-limit, and rotor-limit checks
+- Optional stale-command watchdog with zero-command behavior
+- Latched software emergency stop, explicit clear, and safe command clearing on stop
+- Runtime fault and sensor-read error reporting in snapshots
+- HTTP endpoints for software emergency-stop and recovery
+
+These controls are process-level safeguards. They are not safety-rated and do
+not replace an independent physical E-stop or drive-level failsafe. See
+[`runtime-safety.md`](runtime-safety.md).
+
 ### CLI Framework
 All core commands implemented:
 - `stacc init` - Scaffold a project
@@ -143,12 +156,19 @@ All core commands implemented:
 - `ActionMapper` + `SpeechInterface` — text/speech to robot actions
 - `ObjectDetector` (OpenCV/ONNX/Torch), `VisualOdometry`, `StereoDepthEstimator`
 
-## Coming Soon
+## Known gaps and scope boundaries
 
-- URDF parsing / serialization
-- MuJoCo simulation backend
-- Hardware abstraction layer
-- AI/perception toolkit
+- The package registry is a built-in package list; there is no hosted registry,
+  signed package publishing, or real package download/resolution.
+- Several board upload and transport providers are intentionally unsupported
+  until a board-specific command or protocol is verified. Do not infer hardware
+  support from a board catalog entry.
+- ROS 2 integration is a bridge/skeleton in selected modules, not a complete
+  workspace, launch, DDS, lifecycle, bag, and custom-interface workflow.
+- The Python runtime is soft real time. Deadline measurements do not provide
+  hard real-time guarantees; safety stops in this process are not safety-rated.
+- Cloud simulation, a community marketplace, and fleet OTA deployment remain
+  future work.
 
 ## Roadmap
 
@@ -163,10 +183,10 @@ All core commands implemented:
 - [x] Kinematics engine (FK, IK, trajectory generation)
 - [x] Sensor module — IMU, cameras, LiDAR, GPS, ultrasonic, encoder, IR, F/T, barometer, temperature, contact
 - [x] Simulation module — physics backends, MJCF builder, worlds, recording, RL environments
-- [ ] MuJoCo simulation backend
-- [ ] Hardware abstraction layer
+- [x] MuJoCo simulation backend (optional dependency; headless and viewer modes)
+- [x] Hardware abstraction interfaces (provider coverage varies by board)
 - [ ] Sensor simulation
-- [ ] AI/perception toolkit
+- [x] AI/perception modules (optional backends and models required)
 - [ ] Package registry server
 - [ ] Cloud simulation
 - [ ] Community marketplace

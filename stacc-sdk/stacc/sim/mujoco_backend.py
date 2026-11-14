@@ -172,6 +172,10 @@ class MuJoCoBackend(PhysicsBackend):
         if self.viewer:
             self.viewer.close()
             self.viewer = None
+        for sensor in getattr(self.robot, "sensors", []):
+            close_renderer = getattr(sensor, "close_renderer", None)
+            if callable(close_renderer):
+                close_renderer()
 
     def capabilities(self) -> Dict[str, bool]:
         """SimEngine capability declaration conforming to Phase 4 Step 4.5."""

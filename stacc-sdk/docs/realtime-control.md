@@ -38,6 +38,14 @@ done. `GET /v1/runtime/shm` reports the mode, layout, joint and rotor order
 and the counters; `/v1/system/status` shows `shm_status` (e.g.
 `lockstep /dev/shm/stacc_rt_8766`).
 
+The runtime uses monotonic absolute deadlines and reports measured deadline
+misses. Fixed physics steps are distributed across control periods, so 60 Hz
+does not accumulate a 17 ms physics period with a 1 ms timestep. General-
+purpose Linux and Python remain soft real time; these measurements do not
+guarantee hard deadlines. See [`runtime-safety.md`](runtime-safety.md) for
+actuator limits, watchdog setup, software E-stop behavior, and deployment
+safety boundaries.
+
 ```
 POST /v1/runtime/shm  {"enable": true, "mode": "lockstep", "timeout_ms": 1000}
 POST /v1/runtime/shm  {"enable": false}

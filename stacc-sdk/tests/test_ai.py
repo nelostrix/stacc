@@ -6,7 +6,9 @@ import sys
 results = []
 
 
-def test(name, func):
+def _run_legacy_check(name, func):
+    if __name__ != "__main__":
+        return
     try:
         func()
         results.append((name, "PASS"))
@@ -35,7 +37,7 @@ def test_ekf_slam():
     assert len(lms) == 1
 
 
-test("EKF-SLAM — predict + update", test_ekf_slam)
+_run_legacy_check("EKF-SLAM — predict + update", test_ekf_slam)
 
 
 def test_ekf_slam_multi():
@@ -49,7 +51,7 @@ def test_ekf_slam_multi():
     assert abs(slam.x) > 0
 
 
-test("EKF-SLAM — multi-step", test_ekf_slam_multi)
+_run_legacy_check("EKF-SLAM — multi-step", test_ekf_slam_multi)
 
 # ═══════ PARTICLE FILTER SLAM ═══════
 
@@ -66,7 +68,7 @@ def test_particle_slam():
     assert len(mean) == 3
 
 
-test("Particle Filter SLAM", test_particle_slam)
+_run_legacy_check("Particle Filter SLAM", test_particle_slam)
 
 # ═══════ ICP ═══════
 
@@ -84,7 +86,7 @@ def test_icp():
     assert abs(t[1] - 0.3) < 0.2
 
 
-test("ICP scan matching", test_icp)
+_run_legacy_check("ICP scan matching", test_icp)
 
 # ═══════ OCCUPANCY GRID MAPPER ═══════
 
@@ -100,7 +102,7 @@ def test_occ_mapper():
     assert binary.shape == (100, 100)
 
 
-test("Occupancy grid mapper", test_occ_mapper)
+_run_legacy_check("Occupancy grid mapper", test_occ_mapper)
 
 # ═══════ SLAM NAVIGATOR ═══════
 
@@ -118,7 +120,7 @@ def test_slam_navigator():
     assert len(pose) == 3
 
 
-test("SLAM Navigator", test_slam_navigator)
+_run_legacy_check("SLAM Navigator", test_slam_navigator)
 
 # ═══════ NLP COMMAND PARSER ═══════
 
@@ -133,7 +135,7 @@ def test_nlp_move():
     assert cmd.params["distance"] == 3.0
 
 
-test("NLP — move command", test_nlp_move)
+_run_legacy_check("NLP — move command", test_nlp_move)
 
 
 def test_nlp_turn():
@@ -146,7 +148,7 @@ def test_nlp_turn():
     assert cmd.params["angle"] == 45.0
 
 
-test("NLP — turn command", test_nlp_turn)
+_run_legacy_check("NLP — turn command", test_nlp_turn)
 
 
 def test_nlp_stop():
@@ -157,7 +159,7 @@ def test_nlp_stop():
     assert cmd.action == "stop"
 
 
-test("NLP — stop command", test_nlp_stop)
+_run_legacy_check("NLP — stop command", test_nlp_stop)
 
 
 def test_nlp_pick():
@@ -169,7 +171,7 @@ def test_nlp_pick():
     assert "red cube" in cmd.params["object"]
 
 
-test("NLP — pick command", test_nlp_pick)
+_run_legacy_check("NLP — pick command", test_nlp_pick)
 
 
 def test_nlp_goto():
@@ -182,7 +184,7 @@ def test_nlp_goto():
     assert abs(cmd.params["y"] - 2.1) < 0.01
 
 
-test("NLP — goto position", test_nlp_goto)
+_run_legacy_check("NLP — goto position", test_nlp_goto)
 
 
 def test_nlp_unknown():
@@ -194,7 +196,7 @@ def test_nlp_unknown():
     assert cmd.confidence == 0.0
 
 
-test("NLP — unknown command", test_nlp_unknown)
+_run_legacy_check("NLP — unknown command", test_nlp_unknown)
 
 
 def test_nlp_custom_pattern():
@@ -207,7 +209,7 @@ def test_nlp_custom_pattern():
     assert cmd.params["style"] == "salsa"
 
 
-test("NLP — custom pattern", test_nlp_custom_pattern)
+_run_legacy_check("NLP — custom pattern", test_nlp_custom_pattern)
 
 
 def test_nlp_action_mapper():
@@ -228,7 +230,7 @@ def test_nlp_action_mapper():
     assert called[0]
 
 
-test("NLP — action mapper", test_nlp_action_mapper)
+_run_legacy_check("NLP — action mapper", test_nlp_action_mapper)
 
 # ═══════ VISION (without OpenCV) ═══════
 
@@ -244,7 +246,7 @@ def test_detection_class():
     assert dd["confidence"] == 0.95
 
 
-test("Vision — Detection class", test_detection_class)
+_run_legacy_check("Vision — Detection class", test_detection_class)
 
 
 def test_object_detector_init():
@@ -254,7 +256,7 @@ def test_object_detector_init():
     assert det.backend == "opencv"
 
 
-test("Vision — ObjectDetector init", test_object_detector_init)
+_run_legacy_check("Vision — ObjectDetector init", test_object_detector_init)
 
 
 def test_feature_extractor_init():
@@ -264,7 +266,7 @@ def test_feature_extractor_init():
     assert fe.method == "orb"
 
 
-test("Vision — FeatureExtractor init", test_feature_extractor_init)
+_run_legacy_check("Vision — FeatureExtractor init", test_feature_extractor_init)
 
 
 def test_color_detector():
@@ -276,7 +278,7 @@ def test_color_detector():
     assert len(cd.colors) == 2
 
 
-test("Vision — ColorDetector setup", test_color_detector)
+_run_legacy_check("Vision — ColorDetector setup", test_color_detector)
 
 
 def test_visual_odometry_init():
@@ -286,7 +288,7 @@ def test_visual_odometry_init():
     assert vo.position == [0, 0, 0]
 
 
-test("Vision — VisualOdometry init", test_visual_odometry_init)
+_run_legacy_check("Vision — VisualOdometry init", test_visual_odometry_init)
 
 
 def test_stereo_depth_init():
@@ -296,7 +298,7 @@ def test_stereo_depth_init():
     assert sde.baseline == 0.12
 
 
-test("Vision — StereoDepthEstimator init", test_stereo_depth_init)
+_run_legacy_check("Vision — StereoDepthEstimator init", test_stereo_depth_init)
 
 # ═══════ VISION WITH OPENCV ═══════
 
@@ -321,7 +323,7 @@ def test_vision_opencv():
     kp, desc = fe.extract(img)
 
 
-test("Vision — OpenCV detection + features", test_vision_opencv)
+_run_legacy_check("Vision — OpenCV detection + features", test_vision_opencv)
 
 
 def test_optical_flow():
@@ -341,7 +343,7 @@ def test_optical_flow():
     dx, dy = flow.get_mean_motion()
 
 
-test("Vision — optical flow", test_optical_flow)
+_run_legacy_check("Vision — optical flow", test_optical_flow)
 
 # ═══════ SUMMARY ═══════
 
@@ -356,4 +358,5 @@ else:
         f"  \033[92m{passed} passed\033[0m, \033[91m{failed} failed\033[0m out of {total}"
     )
 print("=" * 60 + "\n")
-sys.exit(1 if failed > 0 else 0)
+if __name__ == "__main__":
+    sys.exit(1 if failed > 0 else 0)

@@ -44,7 +44,11 @@ try:
     import stacc
     from stacc.server import StaccRuntime, create_robot
 
-    RT = StaccRuntime(physics="mujoco", hz=1000.0, timestep=0.001, headless=True)
+    _command_timeout = os.environ.get("NELO_STACC_COMMAND_TIMEOUT")
+    RT = StaccRuntime(
+        physics="mujoco", hz=1000.0, timestep=0.001, headless=True,
+        command_timeout=float(_command_timeout) if _command_timeout else None,
+    )
     RT.set_robot(create_robot("arm", name="default_arm"))
     RT.set_joint_positions([0.0] * RT.robot.dof)  # servo-hold zero pose
     RT.start()
@@ -1011,6 +1015,31 @@ def runtime_telemetry() -> Dict[str, Any]:
     return rt.snapshot()
 
 
+def runtime_emergency_stop(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Latch the live runtime's software stop and command zero outputs."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    rt.emergency_stop(str(req.get("reason", "operator request")))
+    return {"safety": rt.snapshot().get("safety", {}), "running": rt.running, "paused": rt.paused}
+
+
+def runtime_safety() -> Dict[str, Any]:
+    rt, err = _runtime_required()
+    if err:
+        return err
+    return rt.snapshot().get("safety", {})
+
+
+def runtime_clear_emergency_stop() -> Dict[str, Any]:
+    """Explicitly clear the software stop latch without restoring old commands."""
+    rt, err = _runtime_required()
+    if err:
+        return err
+    rt.clear_emergency_stop()
+    return {"safety": rt.snapshot().get("safety", {}), "running": rt.running, "paused": rt.paused}
+
+
 # The port this daemon actually bound (set in run_server); names its shm channel.
 SERVER_PORT = 8766
 
@@ -1190,6 +1219,7 @@ RUNTIME_GET = {
     "/v1/runtime/sensors": runtime_sensors,
     "/v1/runtime/telemetry": runtime_telemetry,
     "/v1/runtime/shm": runtime_shm_status,
+    "/v1/runtime/safety": runtime_safety,
 }
 RUNTIME_POST = {
     "/v1/runtime/load_project": runtime_load_project,
@@ -1203,6 +1233,8 @@ RUNTIME_POST = {
     "/v1/runtime/control/gains": runtime_control_gains,
     "/v1/runtime/stop": lambda req=None: runtime_stop(),
     "/v1/runtime/shm": runtime_shm,
+    "/v1/runtime/emergency-stop": runtime_emergency_stop,
+    "/v1/runtime/emergency-stop/clear": lambda req=None: runtime_clear_emergency_stop(),
     "/v1/runtime/kill": lambda req=None: runtime_kill(),
 }
 

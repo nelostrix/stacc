@@ -28,6 +28,8 @@ CLI:
 
 from __future__ import annotations
 
+from typing import Optional
+
 from stacc.server.runtime import (
     StaccRuntime,
     create_robot,
@@ -61,12 +63,15 @@ def serve(
     hz: float = 60.0,
     timestep: float = 0.001,
     fastapi: bool = False,
+    command_timeout: Optional[float] = None,
 ):
     """Launch either the stdlib REST bridge or the FastAPI+WebSocket server.
 
     Blocks until interrupted. Both share the same StaccRuntime underneath.
     """
     if fastapi:
-        serve_fastapi(host=host, port=port, robot=robot, physics=physics, hz=hz)
+        serve_fastapi(host=host, port=port, robot=robot, physics=physics,
+                      hz=hz, timestep=timestep, command_timeout=command_timeout)
     else:
-        run_stacc_server(host=host, port=port, robot=robot, physics=physics, hz=hz)
+        run_stacc_server(host=host, port=port, robot=robot, physics=physics,
+                         hz=hz, timestep=timestep, command_timeout=command_timeout)

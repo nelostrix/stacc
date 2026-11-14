@@ -239,6 +239,18 @@ def test_bridge_camera_404(bridge):
     assert "error" in data
 
 
+def test_bridge_emergency_stop_requires_explicit_clear(bridge, runtime):
+    status, stopped = _request(bridge.port, "POST", "/api/stacc/emergency-stop", {"reason": "test"})
+    assert status == 200
+    assert stopped["safety"]["emergency_stopped"] is True
+    assert stopped["safety"]["emergency_stop_reason"] == "test"
+    status, _ = _request(bridge.port, "POST", "/api/stacc/start")
+    assert status == 409  # latched stop cannot be silently bypassed
+    status, cleared = _request(bridge.port, "POST", "/api/stacc/emergency-stop/clear")
+    assert status == 200
+    assert cleared["safety"]["emergency_stopped"] is False
+
+
 def test_factory_arm_physics_is_servo_stable():
     """The arm factory must ship plausible passive dynamics so a PD servo
     can actually converge (regression: frictionless point-mass chain used to

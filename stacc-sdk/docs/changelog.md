@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-11-14 — Live runtime reliability and safety (unreleased)
+
+- Schedule control cycles against monotonic deadlines and distribute fractional
+  fixed physics steps across cycles to prevent systematic timing drift.
+- Validate runtime frequencies, physics timesteps, actuator vector sizes, finite
+  values, joint targets, torque limits, rotor ranges, and controller gains.
+- Add an opt-in stale-command watchdog, latched software emergency stop,
+  explicit recovery, stale shared-memory command discard, and zero-command
+  behavior on stop and runtime faults.
+- Expose safety state and sensor read errors in telemetry, with emergency-stop
+  routes on the stdlib, FastAPI, and NELO Studio STACC daemon APIs.
+- Add `stacc serve --command-timeout` and `NELO_STACC_COMMAND_TIMEOUT` for the
+  Studio daemon.
+- Create MuJoCo camera contexts lazily on the sensor sampling thread, close
+  them on their owning thread, and serve cached images to HTTP clients. This
+  avoids EGL/GLX context errors when camera sensors run in the background loop.
+- Declare the CLI's PyYAML dependency and update project-init tests to check the
+  canonical `stacc.yaml` manifest. Convert legacy check scripts into
+  pytest-discoverable functions while retaining their standalone runner.
+- Add simulator-only runtime fault, watchdog, scheduling, and emergency-stop
+  tests; no hardware motion or firmware upload was performed.
+
 ## 2026-06-10 — hal + gait + gripper + robot + control/ai improvements
 
 ### `stacc.sensors` — Full module overhaul
@@ -268,3 +290,12 @@
 - Added missing `Gripper` import
 - Extracted vacuum-to-force calculation into `holding_force` property with formula documentation
 - Added input validation (`num_cups >= 1`, `cup_diameter > 0`, `seal_threshold` in valid range)
+
+## 2026-11-14 — Hardware/control boundary corrections (unreleased)
+
+- Real GPIO requires an implemented RPi/Jetson provider; missing/gpiod-only environments fail explicitly. Simulation requires explicit selection.
+- SocketCAN errors no longer silently select virtual transport. Reject oversized frames and unsupported physical CAN-FD. The invalid generic Unitree hybrid encoder is disabled pending a verified model-specific protocol.
+- Replace S-curve stepping with analytic rest-to-rest seven-segment motion. Validate limits; reject active-motion retargeting (finish/reset first).
+- Firmware upload uses literal argv, rejects unsupported/manual providers, requires explicit ESP flash address and uses exact normalized board lookup.
+- SSH uses trusted host keys and rejects unknown identities; optional `known_hosts` supports enrolled host files.
+- Declare NumPy core dependency plus HAL/test extras. Clean wheel imports and control-boundary regression tests verified; no physical support certification implied.

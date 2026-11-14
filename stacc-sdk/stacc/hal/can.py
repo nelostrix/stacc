@@ -25,6 +25,10 @@ class CANFrame:
         self.is_extended = bool(is_extended)
         self.is_fd = bool(is_fd)
         self.dlc = len(self.data)
+        if not 0 <= self.arbitration_id <= (0x1FFFFFFF if self.is_extended else 0x7FF):
+            raise ValueError("CAN arbitration ID is outside the selected frame format")
+        if self.dlc > (64 if self.is_fd else 8):
+            raise ValueError("CAN payload exceeds the selected frame format")
         self.timestamp = time.time()
 
     def __repr__(self) -> str:
@@ -54,12 +58,19 @@ class CANBus:
                 self._socket = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
                 self._socket.bind((self.channel,))
                 self._socket.setblocking(False)
-            except Exception:
-                # Fallback to virtual buffer if socket can't bind on non-Linux or without permissions
-                self.is_virtual = True
+            except Exception as exc:
+                if self._socket is not None:
+                    self._socket.close()
+                    self._socket = None
+                raise ConnectionError(
+                    f"Cannot open real CAN interface {self.channel!r}; "
+                    "use is_virtual=True explicitly for simulation"
+                ) from exc
 
     def send(self, frame: CANFrame) -> bool:
         """Transmit a CAN frame onto the bus."""
+        if frame.is_fd and not self.is_virtual:
+            raise NotImplementedError("Physical CAN-FD transmission is not implemented")
         if self.is_virtual or self._socket is None:
             self._rx_buffer.append(frame)
             return True
@@ -135,12 +146,10 @@ class UnitreeMotorCAN:
         tau_ff: float
     ) -> bool:
         """Send 5-parameter hybrid impedance control command: tau = tau_ff + kp*(q_des - q) + kd*(dq_des - dq)."""
-        # Pack 5 parameters into compact Unitree CAN format
-        q_raw = int(q_des * 1000.0)
-        dq_raw = int(dq_des * 100.0)
-        kp_raw = int(kp * 10.0)
-        kd_raw = int(kd * 100.0)
-        tau_raw = int(tau_ff * 100.0)
-
-        data = struct.pack("<hhhhh", q_raw, dq_raw, kp_raw, kd_raw, tau_raw)[:8]
-        return self.bus.send(CANFrame(arbitration_id=0x01 + self.motor_id, data=data))
+        # The former generic encoder packed ten bytes and discarded torque by
+        # truncating to eight. Unitree families require model-specific protocols;
+        # an invented packet must never be sent to a physical motor.
+        raise NotImplementedError(
+            "Unitree hybrid control requires a verified model-specific driver; "
+            "the previous lossy generic CAN encoding is disabled"
+        )

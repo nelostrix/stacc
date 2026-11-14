@@ -9,7 +9,9 @@ import tempfile
 results = []
 
 
-def test(name, func):
+def _run_legacy_check(name, func):
+    if __name__ != "__main__":
+        return
     try:
         func()
         results.append((name, "PASS", ""))
@@ -38,7 +40,7 @@ def test_world_basic():
     assert len(els) == 3
 
 
-test("World — add objects", test_world_basic)
+_run_legacy_check("World — add objects", test_world_basic)
 
 
 def test_world_wall():
@@ -50,7 +52,7 @@ def test_world_wall():
     assert w.objects[0].shape == "box"
 
 
-test("World — walls", test_world_wall)
+_run_legacy_check("World — walls", test_world_wall)
 
 
 def test_world_terrain():
@@ -62,7 +64,7 @@ def test_world_terrain():
     assert len(els) == 5
 
 
-test("World — terrain stairs", test_world_terrain)
+_run_legacy_check("World — terrain stairs", test_world_terrain)
 
 
 def test_world_prebuilt():
@@ -79,7 +81,7 @@ def test_world_prebuilt():
         assert w.name != ""
 
 
-test("World — pre-built environments", test_world_prebuilt)
+_run_legacy_check("World — pre-built environments", test_world_prebuilt)
 
 # ═══════ RECORDER ═══════
 
@@ -105,7 +107,7 @@ def test_recorder_basic():
     assert recorder.recording.duration > 0
 
 
-test("Recorder — basic recording", test_recorder_basic)
+_run_legacy_check("Recorder — basic recording", test_recorder_basic)
 
 
 def test_recorder_save_load():
@@ -134,7 +136,7 @@ def test_recorder_save_load():
     os.unlink(tmpfile)
 
 
-test("Recorder — save/load JSON", test_recorder_save_load)
+_run_legacy_check("Recorder — save/load JSON", test_recorder_save_load)
 
 
 def test_recorder_csv():
@@ -164,7 +166,7 @@ def test_recorder_csv():
     os.unlink(tmpfile)
 
 
-test("Recorder — save CSV", test_recorder_csv)
+_run_legacy_check("Recorder — save CSV", test_recorder_csv)
 
 # ═══════ BEHAVIOR TREE ═══════
 
@@ -184,7 +186,7 @@ def test_bt_action():
     assert node.tick() == Status.SUCCESS
 
 
-test("BehaviorTree — Action node", test_bt_action)
+_run_legacy_check("BehaviorTree — Action node", test_bt_action)
 
 
 def test_bt_condition():
@@ -197,7 +199,7 @@ def test_bt_condition():
     assert node.tick() == Status.SUCCESS
 
 
-test("BehaviorTree — Condition node", test_bt_condition)
+_run_legacy_check("BehaviorTree — Condition node", test_bt_condition)
 
 
 def test_bt_sequence():
@@ -214,7 +216,7 @@ def test_bt_sequence():
     assert seq.tick() == Status.SUCCESS
 
 
-test("BehaviorTree — Sequence (all succeed)", test_bt_sequence)
+_run_legacy_check("BehaviorTree — Sequence (all succeed)", test_bt_sequence)
 
 
 def test_bt_sequence_fail():
@@ -231,7 +233,7 @@ def test_bt_sequence_fail():
     assert seq.tick() == Status.FAILURE
 
 
-test("BehaviorTree — Sequence (one fails)", test_bt_sequence_fail)
+_run_legacy_check("BehaviorTree — Sequence (one fails)", test_bt_sequence_fail)
 
 
 def test_bt_selector():
@@ -248,7 +250,7 @@ def test_bt_selector():
     assert sel.tick() == Status.SUCCESS
 
 
-test("BehaviorTree — Selector", test_bt_selector)
+_run_legacy_check("BehaviorTree — Selector", test_bt_selector)
 
 
 def test_bt_repeat():
@@ -268,7 +270,7 @@ def test_bt_repeat():
     assert count[0] == 3
 
 
-test("BehaviorTree — Repeat decorator", test_bt_repeat)
+_run_legacy_check("BehaviorTree — Repeat decorator", test_bt_repeat)
 
 
 def test_bt_timeout():
@@ -280,7 +282,7 @@ def test_bt_timeout():
     assert node.tick(0.5) == Status.FAILURE
 
 
-test("BehaviorTree — Timeout decorator", test_bt_timeout)
+_run_legacy_check("BehaviorTree — Timeout decorator", test_bt_timeout)
 
 
 def test_bt_wait():
@@ -292,7 +294,7 @@ def test_bt_wait():
     assert node.tick(0.2) == Status.SUCCESS
 
 
-test("BehaviorTree — Wait node", test_bt_wait)
+_run_legacy_check("BehaviorTree — Wait node", test_bt_wait)
 
 # ═══════ PATH PLANNING ═══════
 
@@ -308,7 +310,7 @@ def test_astar():
     assert len(path) >= 2
 
 
-test("PathPlanning — A*", test_astar)
+_run_legacy_check("PathPlanning — A*", test_astar)
 
 
 def test_astar_no_path():
@@ -322,7 +324,7 @@ def test_astar_no_path():
     assert path is None
 
 
-test("PathPlanning — A* no path", test_astar_no_path)
+_run_legacy_check("PathPlanning — A* no path", test_astar_no_path)
 
 
 def test_dijkstra():
@@ -335,7 +337,7 @@ def test_dijkstra():
     assert len(path) >= 2
 
 
-test("PathPlanning — Dijkstra", test_dijkstra)
+_run_legacy_check("PathPlanning — Dijkstra", test_dijkstra)
 
 
 def test_rrt_star():
@@ -353,7 +355,7 @@ def test_rrt_star():
     assert len(path) >= 2
 
 
-test("PathPlanning — RRT*", test_rrt_star)
+_run_legacy_check("PathPlanning — RRT*", test_rrt_star)
 
 
 def test_potential_field():
@@ -367,7 +369,7 @@ def test_potential_field():
     assert len(path) > 5
 
 
-test("PathPlanning — Potential Fields", test_potential_field)
+_run_legacy_check("PathPlanning — Potential Fields", test_potential_field)
 
 
 def test_occupancy_grid():
@@ -382,7 +384,7 @@ def test_occupancy_grid():
     assert inflated.width == 100
 
 
-test("PathPlanning — OccupancyGrid ops", test_occupancy_grid)
+_run_legacy_check("PathPlanning — OccupancyGrid ops", test_occupancy_grid)
 
 # ═══════ TRAJECTORY ═══════
 
@@ -398,7 +400,7 @@ def test_quintic():
     assert abs(v1) < 0.01
 
 
-test("Trajectory — Quintic", test_quintic)
+_run_legacy_check("Trajectory — Quintic", test_quintic)
 
 
 def test_minjerk():
@@ -411,7 +413,7 @@ def test_minjerk():
     assert -1 < p[1] < 0
 
 
-test("Trajectory — MinJerk", test_minjerk)
+_run_legacy_check("Trajectory — MinJerk", test_minjerk)
 
 
 def test_trapezoidal():
@@ -426,7 +428,7 @@ def test_trapezoidal():
     assert abs(pf - 2.0) < 0.05
 
 
-test("Trajectory — Trapezoidal", test_trapezoidal)
+_run_legacy_check("Trajectory — Trapezoidal", test_trapezoidal)
 
 
 def test_waypoint_path():
@@ -443,7 +445,7 @@ def test_waypoint_path():
     assert len(p) == 2
 
 
-test("Trajectory — WaypointPath", test_waypoint_path)
+_run_legacy_check("Trajectory — WaypointPath", test_waypoint_path)
 
 # ═══════ HAL ═══════
 
@@ -457,7 +459,7 @@ def test_board_detect():
     assert "platform" in info
 
 
-test("HAL — Board detection", test_board_detect)
+_run_legacy_check("HAL — Board detection", test_board_detect)
 
 
 def test_gpio_simulation():
@@ -471,7 +473,7 @@ def test_gpio_simulation():
     assert gpio.read(18) == GPIO.LOW
 
 
-test("HAL — GPIO (simulation mode)", test_gpio_simulation)
+_run_legacy_check("HAL — GPIO (simulation mode)", test_gpio_simulation)
 
 
 def test_serial_list():
@@ -481,7 +483,7 @@ def test_serial_list():
     assert isinstance(ports, list)
 
 
-test("HAL — Serial port listing", test_serial_list)
+_run_legacy_check("HAL — Serial port listing", test_serial_list)
 
 
 def test_motor_simulation():
@@ -498,7 +500,7 @@ def test_motor_simulation():
     assert motor.speed == 0.0
 
 
-test("HAL — MotorDriver (simulation)", test_motor_simulation)
+_run_legacy_check("HAL — MotorDriver (simulation)", test_motor_simulation)
 
 
 def test_servo_simulation():
@@ -515,7 +517,7 @@ def test_servo_simulation():
     assert servo.angle == 180
 
 
-test("HAL — ServoDriver (simulation)", test_servo_simulation)
+_run_legacy_check("HAL — ServoDriver (simulation)", test_servo_simulation)
 
 # ═══════ GYM ENV ═══════
 
@@ -551,7 +553,7 @@ def test_gym_env():
     env.close()
 
 
-test("GymEnv — basic step cycle", test_gym_env)
+_run_legacy_check("GymEnv — basic step cycle", test_gym_env)
 
 # ═══════ SUMMARY ═══════
 
@@ -573,4 +575,5 @@ else:
             print(f"    {err}")
 
 print("=" * 60 + "\n")
-sys.exit(1 if failed > 0 else 0)
+if __name__ == "__main__":
+    sys.exit(1 if failed > 0 else 0)

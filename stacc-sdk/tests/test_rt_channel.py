@@ -49,6 +49,19 @@ def test_state_and_command_round_trip(shm_path):
     assert not os.path.exists(shm_path)
 
 
+def test_channel_rejects_invalid_modes_and_nonfinite_commands(shm_path):
+    with pytest.raises(ValueError, match="mode"):
+        ControlChannel.create(shm_path, n_joints=1, mode=7)
+    channel = ControlChannel.create(shm_path, n_joints=1, n_thrusters=1)
+    try:
+        with pytest.raises(ValueError, match="finite"):
+            channel.command_positions([math.nan], answers_step=0)
+        with pytest.raises(ValueError, match="finite"):
+            channel.command_torques([0.0], answers_step=0, thrust=[math.nan])
+    finally:
+        channel.close()
+
+
 def test_reader_never_returns_a_half_written_block(shm_path):
     owner = ControlChannel.create(shm_path, n_joints=1)
     try:

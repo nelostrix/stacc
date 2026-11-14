@@ -32,6 +32,7 @@ class Deployer:
         user: str = "pi",
         port: int = 22,
         key_file: Optional[str] = None,
+        known_hosts: Optional[str] = None,
     ):
         if not host:
             raise ValueError("host must not be empty")
@@ -40,6 +41,7 @@ class Deployer:
         self.user = user
         self.port = port
         self.key_file = key_file
+        self.known_hosts = known_hosts
         self._ssh = None
 
     def connect(self) -> bool:
@@ -51,18 +53,26 @@ class Deployer:
         try:
             import paramiko
 
+            self.close()
             self._ssh = paramiko.SSHClient()
-            self._ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            self._ssh.load_system_host_keys()
+            if self.known_hosts:
+                self._ssh.load_host_keys(self.known_hosts)
+            self._ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
             kwargs: Dict[str, Any] = {
                 "hostname": self.host,
                 "username": self.user,
                 "port": self.port,
+                "timeout": 10,
+                "banner_timeout": 10,
+                "auth_timeout": 10,
             }
             if self.key_file:
                 kwargs["key_filename"] = self.key_file
             self._ssh.connect(**kwargs)
             return True
         except Exception as e:
+            self.close()
             print(f"  [deploy] SSH connection failed: {e}")
             return False
 
@@ -158,7 +168,8 @@ class Deployer:
             self._ssh = None
 
     def __enter__(self) -> Deployer:
-        self.connect()
+        if not self.connect():
+            raise ConnectionError(f"SSH connection to {self.host!r} failed")
         return self
 
     def __exit__(self, *args: Any) -> None:

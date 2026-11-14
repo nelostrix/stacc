@@ -96,6 +96,16 @@ def create_app(runtime: Optional[StaccRuntime] = None) -> "FastAPI":
         rt.reset()
         return rt.snapshot()
 
+    @app.post("/api/safety/emergency-stop")
+    def emergency_stop(payload: dict | None = None):
+        rt.emergency_stop(str((payload or {}).get("reason", "operator request")))
+        return rt.snapshot()
+
+    @app.post("/api/safety/emergency-stop/clear")
+    def clear_emergency_stop():
+        rt.clear_emergency_stop()
+        return rt.snapshot()
+
     @app.post("/api/sim/step")
     def sim_step(payload: dict | None = None):
         n = int(payload.get("n", 1)) if payload else 1
@@ -156,13 +166,15 @@ def create_app(runtime: Optional[StaccRuntime] = None) -> "FastAPI":
 
 
 def serve(runtime: Optional[StaccRuntime] = None, host: str = "0.0.0.0", port: int = 8002,
-          robot: str = "arm", physics: str = "mujoco", hz: float = 60.0):
+          robot: str = "arm", physics: str = "mujoco", hz: float = 60.0,
+          timestep: float = 0.001, command_timeout: Optional[float] = None):
     """Run the FastAPI app via uvicorn (blocks until killed)."""
     _require_fastapi()
     import uvicorn
 
     if runtime is None:
-        rt = StaccRuntime(physics=physics, hz=hz)
+        rt = StaccRuntime(physics=physics, hz=hz, timestep=timestep,
+                          command_timeout=command_timeout)
         rt.set_robot(create_robot(robot))
     else:
         rt = runtime
@@ -187,5 +199,9 @@ if __name__ == "__main__":
                         choices=sorted(r["type"] for r in available_robots()))
     parser.add_argument("--physics", default="mujoco", choices=["mujoco", "internal"])
     parser.add_argument("--hz", type=float, default=60.0)
+    parser.add_argument("--timestep", type=float, default=0.001)
+    parser.add_argument("--command-timeout", type=float, default=None,
+                        help="Stop actuator commands after this many seconds without a fresh command")
     args = parser.parse_args()
-    serve(host=args.host, port=args.port, robot=args.robot, physics=args.physics, hz=args.hz)
+    serve(host=args.host, port=args.port, robot=args.robot, physics=args.physics,
+          hz=args.hz, timestep=args.timestep, command_timeout=args.command_timeout)

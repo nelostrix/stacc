@@ -51,29 +51,32 @@ class DepthCamera(BaseSensor):
         self._mj_model = None
         self._mj_data = None
         self._mj_renderer = None
+        self._renderer_attempted = False
 
     def reset(self):
         """Clear images and backend references."""
+        self.close_renderer()
         self._rgb = None
         self._depth = None
         self._mj_model = None
         self._mj_data = None
-        self._mj_renderer = None
+        self._renderer_attempted = False
 
     def set_mujoco_backend(self, model, data):
+        self.close_renderer()
         self._mj_model = model
         self._mj_data = data
-        try:
-            import mujoco
+        self._renderer_attempted = False
 
-            self._mj_renderer = mujoco.Renderer(
-                model, height=self.height, width=self.width
-            )
-        except Exception:
-            self._mj_renderer = None
+    def close_renderer(self):
+        """Release the GL context on the thread that owns this renderer."""
+        renderer = self._mj_renderer
+        self._mj_renderer = None
+        if renderer is not None:
+            renderer.close()
 
     def read(self) -> Dict[str, Any]:
-        if self._mj_renderer is not None:
+        if self._mj_model is not None and self._mj_data is not None:
             self._capture_mujoco()
         else:
             self._capture_synthetic()
@@ -88,6 +91,15 @@ class DepthCamera(BaseSensor):
     def _capture_mujoco(self):
         try:
             import mujoco
+
+            if self._mj_renderer is None and not self._renderer_attempted:
+                self._renderer_attempted = True
+                self._mj_renderer = mujoco.Renderer(
+                    self._mj_model, height=self.height, width=self.width
+                )
+            if self._mj_renderer is None:
+                self._capture_synthetic()
+                return
 
             self._mj_renderer.update_scene(self._mj_data)
             self._rgb = self._mj_renderer.render()

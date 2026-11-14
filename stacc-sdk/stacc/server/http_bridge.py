@@ -143,8 +143,12 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
         payload = self._body()
 
         if path == "/api/stacc/start":
-            self.runtime.start()
-            self._send_json(legacy_state(self.runtime))
+            try:
+                self.runtime.start()
+            except RuntimeError as e:
+                self._send_json({"error": str(e)}, status=409)
+            else:
+                self._send_json(legacy_state(self.runtime))
         elif path == "/api/stacc/pause":
             self.runtime.pause()
             self._send_json(legacy_state(self.runtime))
@@ -154,6 +158,12 @@ class STACCRequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/stacc/stop":
             self.runtime.stop()
             self._send_json(legacy_state(self.runtime))
+        elif path == "/api/stacc/emergency-stop":
+            self.runtime.emergency_stop(str(payload.get("reason", "operator request")))
+            self._send_json(self.runtime.snapshot())
+        elif path == "/api/stacc/emergency-stop/clear":
+            self.runtime.clear_emergency_stop()
+            self._send_json(self.runtime.snapshot())
         elif path == "/api/stacc/step":
             self.runtime.step_once()
             self._send_json(legacy_state(self.runtime))
@@ -224,10 +234,13 @@ def run_stacc_server(
     robot: str = "arm",
     physics: str = "mujoco",
     hz: float = 60.0,
+    timestep: float = 0.001,
+    command_timeout: Optional[float] = None,
 ):
     """Start the stdlib REST bridge (blocks until interrupted)."""
     if runtime is None:
-        runtime = build_runtime(robot_type=robot, physics=physics, hz=hz)
+        runtime = build_runtime(robot_type=robot, physics=physics, hz=hz,
+                                timestep=timestep, command_timeout=command_timeout)
     if not runtime.running:
         runtime.start()  # live by default; /api/stacc/start|stop can toggle it
     STACCRequestHandler.runtime = runtime
@@ -256,5 +269,9 @@ if __name__ == "__main__":
                         choices=sorted(r["type"] for r in available_robots()))
     parser.add_argument("--physics", default="mujoco", choices=["mujoco", "internal"])
     parser.add_argument("--hz", type=float, default=60.0)
+    parser.add_argument("--timestep", type=float, default=0.001)
+    parser.add_argument("--command-timeout", type=float, default=None,
+                        help="Stop actuator commands after this many seconds without a fresh command")
     args = parser.parse_args()
-    run_stacc_server(host=args.host, port=args.port, robot=args.robot, physics=args.physics, hz=args.hz)
+    run_stacc_server(host=args.host, port=args.port, robot=args.robot, physics=args.physics,
+                     hz=args.hz, timestep=args.timestep, command_timeout=args.command_timeout)

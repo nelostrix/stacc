@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import pytest
+import yaml
 
 
 def run_stacc(*args):
@@ -42,15 +43,15 @@ class TestStaccInit:
     def test_init_blank(self):
         result = run_stacc("init", "test_robot", "--template", "blank")
         assert result.returncode == 0
-        assert os.path.exists("test_robot/stacc.json")
+        assert os.path.exists("test_robot/stacc.yaml")
 
     def test_init_with_template(self):
         result = run_stacc("init", "test_arm", "--template", "arm_6dof")
         assert result.returncode == 0
         assert os.path.exists("test_arm/src/robot.py")
         
-        with open("test_arm/stacc.json") as f:
-            manifest = json.load(f)
+        with open("test_arm/stacc.yaml", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f)
         assert manifest["name"] == "test_arm"
         assert manifest["robot"]["type"] == "manipulator"
 
@@ -100,16 +101,16 @@ class TestStaccInstall:
         result = run_stacc("install", "path-planning")
         assert result.returncode == 0
         
-        with open("stacc.json") as f:
-            manifest = json.load(f)
+        with open("stacc.yaml", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f)
         assert "path-planning" in manifest["dependencies"]
 
     def test_install_with_deps(self):
         result = run_stacc("install", "slam-toolkit")
         assert result.returncode == 0
         
-        with open("stacc.json") as f:
-            manifest = json.load(f)
+        with open("stacc.yaml", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f)
         assert "slam-toolkit" in manifest["dependencies"]
         assert "eigen-bindings" in manifest["dependencies"]
         assert "perception-core" in manifest["dependencies"]
