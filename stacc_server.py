@@ -749,16 +749,20 @@ def runtime_capabilities() -> Dict[str, Any]:
         return {"error": "Live runtime unavailable", "kind": "runtime"}
     backend = getattr(RT.engine, "_physics_backend", None)
     caps = backend.capabilities() if backend is not None and hasattr(backend, "capabilities") else {}
+    configured_engine = RT.config.physics_engine
+    actual_engine = RT.engine.actual_physics_engine or configured_engine
     joints = RT.joint_info()
     sensors = [s.name for s in RT.robot.sensors] if RT.robot is not None else []
     return {
-        "engine": RT.config.physics_engine,
-        "engine_version": MUJOCO_VERSION,
+        "engine": actual_engine,
+        "configured_engine": configured_engine,
+        "fallback": actual_engine != configured_engine,
+        "engine_version": MUJOCO_VERSION if actual_engine == "mujoco" else None,
         "api_version": RUNTIME_API_VERSION,
         "units": "SI",
         # MuJoCo's solver is deterministic for identical state on the same build;
-        # we only claim it for that engine rather than guessing for fallbacks.
-        "deterministic_same_machine": RT.config.physics_engine == "mujoco",
+        # we only claim it for that actual engine rather than guessing for fallbacks.
+        "deterministic_same_machine": actual_engine == "mujoco",
         "joints": len(joints),
         "actuators": len(joints),
         "sensors": sensors,
@@ -894,28 +898,86 @@ def runtime_joints() -> Dict[str, Any]:
 
 
 def runtime_joint_command(req: Dict[str, Any]) -> Dict[str, Any]:
-    """Command joints by position (all), by one named joint, or by torque."""
+    """Validate complete, finite, bounded joint commands before changing runtime state."""
     rt, err = _runtime_required()
     if err:
         return err
+    if not isinstance(req, dict):
+        return {"error": "command must be a JSON object", "kind": "input"}
+
+    variants = (
+        req.get("thrusts") is not None,
+        req.get("torques") is not None,
+        req.get("positions") is not None,
+        req.get("joint") is not None or req.get("angle_rad") is not None,
+    )
+    if sum(variants) != 1:
+        return {"error": "Provide exactly one joint or actuator command", "kind": "input"}
+
+    def finite_values(raw: Any, label: str, count: int) -> List[float]:
+        if not isinstance(raw, list) or len(raw) != count:
+            raise ValueError(f"{label} must contain exactly {count} values")
+        if any(isinstance(value, bool) for value in raw):
+            raise ValueError(f"{label} values must be finite numbers")
+        try:
+            values = [float(value) for value in raw]
+        except (TypeError, ValueError, OverflowError) as e:
+            raise ValueError(f"{label} values must be finite numbers") from e
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError(f"{label} values must be finite numbers")
+        return values
+
+    def commandable_joints() -> List[Any]:
+        joints = list(rt.robot.joints)
+        supported = {"revolute", "continuous", "prismatic"}
+        if len(joints) != len(rt.robot.get_joint_positions()) or any(joint.type not in supported for joint in joints):
+            raise ValueError("This runtime API cannot safely address fixed or multi-axis joints")
+        return joints
+
+    def check_position(joint: Any, value: float) -> None:
+        if joint.type != "continuous":
+            low, high = joint.limits
+            if value < low or value > high:
+                raise ValueError(f"Joint {joint.name} target exceeds its position limits")
+
     try:
-        if req.get("thrusts") is not None:
-            rt.set_thrusts([float(t) for t in req["thrusts"]])
-        elif req.get("torques") is not None:
-            rt.set_joint_torques([float(t) for t in req["torques"]])
-        elif req.get("joint") is not None and req.get("angle_rad") is not None:
-            rt.set_joint_angle(str(req["joint"]), float(req["angle_rad"]))
-        elif req.get("positions") is not None:
-            rt.set_joint_positions([float(p) for p in req["positions"]])
+        if variants[0]:
+            rotors = rt._thruster_readout()
+            values = finite_values(req["thrusts"], "thrusts", len(rotors))
+            for rotor, value in zip(rotors, values):
+                maximum = float(rotor["max_thrust"])
+                if not math.isfinite(maximum) or value < 0 or value > maximum:
+                    raise ValueError(f"Thruster {rotor['name']} value exceeds its 0..{maximum} N range")
+            rt.set_thrusts(values)
+        elif variants[1]:
+            joints = commandable_joints()
+            values = finite_values(req["torques"], "torques", len(rt.robot.get_joint_positions()))
+            for joint, value in zip(joints, values):
+                effort = float(joint.max_effort)
+                if not math.isfinite(effort) or effort < 0 or abs(value) > effort:
+                    raise ValueError(f"Joint {joint.name} torque exceeds its finite effort limit")
+            rt.set_joint_torques(values)
+        elif variants[2]:
+            joints = commandable_joints()
+            values = finite_values(req["positions"], "positions", len(rt.robot.get_joint_positions()))
+            for joint, value in zip(joints, values):
+                check_position(joint, value)
+            rt.set_joint_positions(values)
         else:
-            return {
-                "error": "Provide {positions:[rad]}, {joint,angle_rad}, {torques:[Nm]} or {thrusts:[N]}",
-                "kind": "input",
-            }
-    except (ValueError, RuntimeError) as e:
+            if req.get("joint") is None or req.get("angle_rad") is None:
+                raise ValueError("Named joint commands require both joint and angle_rad")
+            if isinstance(req["angle_rad"], bool):
+                raise ValueError("angle_rad must be finite")
+            joints = commandable_joints()
+            angle = float(req["angle_rad"])
+            if not math.isfinite(angle):
+                raise ValueError("angle_rad must be finite")
+            index = rt.joint_index(str(req["joint"]))
+            check_position(joints[index], angle)
+            rt.set_joint_angle(str(req["joint"]), angle)
+    except (KeyError, TypeError, ValueError, RuntimeError, OverflowError) as e:
         return {"error": str(e), "kind": "input"}
     return {"command_positions": rt.snapshot().get("command_positions")}
-
 
 def runtime_control_gains(req: Dict[str, Any]) -> Dict[str, Any]:
     """Read or set the servo gains (JointImpedance mode)."""

@@ -136,6 +136,15 @@ class SimulationEngine:
         self._physics_backend = None
         self._renderer = None
 
+    @property
+    def actual_physics_engine(self) -> Optional[str]:
+        """Return the active backend, distinguishing the internal fallback."""
+        if self._physics_backend is None:
+            return None
+        if isinstance(self._physics_backend, _InternalPhysics):
+            return "internal"
+        return self.config.physics_engine
+
     def reset(self):
         """Reset engine state and clear physics backend."""
         self.state.reset()

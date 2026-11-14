@@ -26,6 +26,7 @@ Examples:
 """
 
 import argparse
+import copy
 import sys
 import os
 import json
@@ -35,6 +36,7 @@ import hashlib
 import subprocess
 from pathlib import Path
 from datetime import datetime
+import yaml
 
 # ──────────────────────────────────────────────
 # ANSI color codes for terminal output
@@ -93,12 +95,37 @@ def log_step(step, total, msg):
 
 
 # ──────────────────────────────────────────────
-# STACC PROJECT MANIFEST (stacc.toml equivalent stored as JSON for now)
+# STACC project manifest. YAML is canonical; JSON remains supported for existing projects.
 # ──────────────────────────────────────────────
-MANIFEST_NAME = "stacc.json"
+MANIFEST_NAME = "stacc.yaml"
+LEGACY_MANIFEST_NAME = "stacc.json"
 STACC_DIR = Path.home() / ".stacc"
 REGISTRY_DIR = STACC_DIR / "registry"
 CACHE_DIR = STACC_DIR / "cache"
+
+def find_manifest(root=None):
+    """Prefer the YAML manifest; keep existing JSON projects usable."""
+    root = root or Path.cwd()
+    for name in (MANIFEST_NAME, "stacc.yml", LEGACY_MANIFEST_NAME):
+        candidate = root / name
+        if candidate.is_file():
+            return candidate
+    return root / MANIFEST_NAME
+
+def load_manifest(path):
+    with open(path, encoding="utf-8") as stream:
+        manifest = json.load(stream) if path.suffix == ".json" else yaml.safe_load(stream)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"{path.name} must contain a YAML/JSON object")
+    return manifest
+
+def save_manifest(path, manifest):
+    with open(path, "w", encoding="utf-8") as stream:
+        if path.suffix == ".json":
+            json.dump(manifest, stream, indent=2)
+            stream.write("\n")
+        else:
+            yaml.safe_dump(manifest, stream, sort_keys=False, allow_unicode=True)
 
 DEFAULT_MANIFEST = {
     "name": "",
@@ -625,15 +652,14 @@ def cmd_init(args):
         time.sleep(0.05)
     
     # Write manifest
-    manifest = DEFAULT_MANIFEST.copy()
+    manifest = copy.deepcopy(DEFAULT_MANIFEST)
     manifest["name"] = project_name
     manifest["description"] = f"{TEMPLATES[template]['description']}"
     manifest["robot"]["type"] = TEMPLATES[template]["robot_type"]
     
     manifest_path = project_dir / MANIFEST_NAME
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
-    log_step(len(dirs) + 1, steps, "Writing stacc.json")
+    save_manifest(manifest_path, manifest)
+    log_step(len(dirs) + 1, steps, "Writing stacc.yaml")
     time.sleep(0.05)
     
     # Write template files
@@ -690,7 +716,7 @@ stacc deploy 192.168.1.100        # Deploy to robot
 ├── scripts/          # Utility scripts
 ├── assets/           # Meshes, textures
 ├── data/             # Logs, recordings
-└── stacc.json        # Project manifest
+└── stacc.yaml        # Project manifest (legacy stacc.json is still read)
 ```
 
 ## Template: {template}
@@ -724,14 +750,13 @@ def cmd_install(args):
     pkg = BUILTIN_PACKAGES[pkg_name]
     
     # Check if in a stacc project
-    manifest_path = Path.cwd() / MANIFEST_NAME
+    manifest_path = find_manifest()
     if not manifest_path.exists():
         log_error("Not in a stacc project. Run 'stacc init' first.")
         sys.exit(1)
     
     # Load manifest
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = load_manifest(manifest_path)
     
     # Check if already installed
     if pkg_name in manifest.get("dependencies", {}):
@@ -772,8 +797,7 @@ def cmd_install(args):
     for name, info in all_deps:
         manifest["dependencies"][name] = info["version"]
     
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
+    save_manifest(manifest_path, manifest)
     
     print(f"\n  {Color.GREEN}{Color.CHECK} Installed {len(all_deps)} package(s){Color.RESET}\n")
 
@@ -785,13 +809,12 @@ def cmd_remove(args):
     """Remove a stacc package."""
     pkg_name = args.package
     
-    manifest_path = Path.cwd() / MANIFEST_NAME
+    manifest_path = find_manifest()
     if not manifest_path.exists():
         log_error("Not in a stacc project.")
         sys.exit(1)
     
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = load_manifest(manifest_path)
     
     if pkg_name not in manifest.get("dependencies", {}):
         log_error(f"Package '{pkg_name}' is not installed")
@@ -799,8 +822,7 @@ def cmd_remove(args):
     
     del manifest["dependencies"][pkg_name]
     
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
+    save_manifest(manifest_path, manifest)
     
     log_success(f"Removed {pkg_name}")
 
@@ -840,13 +862,12 @@ def cmd_search(args):
 # ──────────────────────────────────────────────
 def cmd_simulate(args):
     """Run simulation."""
-    manifest_path = Path.cwd() / MANIFEST_NAME
+    manifest_path = find_manifest()
     if not manifest_path.exists():
         log_error("Not in a stacc project.")
         sys.exit(1)
     
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = load_manifest(manifest_path)
     
     duration = args.duration or 30
     physics = args.physics or manifest.get("simulation", {}).get("engine", "mujoco")
@@ -896,13 +917,12 @@ def cmd_simulate(args):
 # ──────────────────────────────────────────────
 def cmd_build(args):
     """Build project for a hardware target."""
-    manifest_path = Path.cwd() / MANIFEST_NAME
+    manifest_path = find_manifest()
     if not manifest_path.exists():
         log_error("Not in a stacc project.")
         sys.exit(1)
     
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = load_manifest(manifest_path)
     
     TARGET_MAP = {
         "rpi": "Raspberry Pi (ARM64, Linux)",
@@ -982,13 +1002,12 @@ def cmd_deploy(args):
     target_ip = args.target_ip
     user = args.user or "pi"
 
-    manifest_path = Path.cwd() / MANIFEST_NAME
+    manifest_path = find_manifest()
     if not manifest_path.exists():
         log_error("Not in a stacc project.")
         sys.exit(1)
 
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = load_manifest(manifest_path)
 
     target = getattr(args, "target", None) or "x86_64"
     local_dir = Path.cwd() / "build" / target

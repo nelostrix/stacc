@@ -32,6 +32,7 @@ classifiers = [
 
 dependencies = [
     "numpy>=1.24.0",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -65,7 +66,11 @@ Documentation = "https://docs.stacc.dev"
 Repository = "https://github.com/YOUR_ORG/stacc"
 Issues = "https://github.com/YOUR_ORG/stacc/issues"
 
+[tool.setuptools]
+package-dir = {"" = "stacc-sdk"}
+
 [tool.setuptools.packages.find]
+where = ["stacc-sdk"]
 include = ["stacc*"]
 
 [tool.pytest.ini_options]

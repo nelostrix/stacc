@@ -21,6 +21,7 @@ except ImportError:
     HAS_MUJOCO = False
 
 from stacc.server.runtime import StaccRuntime, create_robot, available_robots
+from stacc.sim.engine import _InternalPhysics
 
 
 @pytest.fixture()
@@ -42,6 +43,19 @@ def test_arm_robot_factory():
 def test_set_robot_with_unknown_type():
     with pytest.raises(ValueError):
         create_robot("mars_rover_9000")
+
+
+def test_engine_reports_actual_backend_when_requested_backend_falls_back():
+    rt = StaccRuntime(physics="mujoco", hz=200.0, timestep=0.001)
+    rt.set_robot(create_robot("arm"))
+    try:
+        # Force the same unavailable-backend fallback without depending on whether
+        # MuJoCo happens to be installed in this test environment.
+        rt.engine._physics_backend = _InternalPhysics(rt.robot, rt.config)
+        assert rt.engine.config.physics_engine == "mujoco"
+        assert rt.engine.actual_physics_engine == "internal"
+    finally:
+        rt.stop()
 
 
 def test_snapshot_shape(runtime):
@@ -257,6 +271,32 @@ def test_arm_servo_tracks_multijoint_pose():
         goal = [math.radians(42), 0.0, math.radians(42), 0.0,
                 math.radians(30), math.radians(60)]
         assert max(abs(a - g) for a, g in zip(q, goal)) < math.radians(2.0)
+    finally:
+        rt.stop()
+
+
+@pytest.mark.skipif(not HAS_MUJOCO, reason="MuJoCo not installed")
+def test_mujoco_snapshot_restore_replays_identically():
+    """A restored full-physics snapshot reproduces the same subsequent state."""
+    import hashlib
+
+    rt = StaccRuntime(physics="mujoco", hz=1000.0, timestep=0.001, headless=True)
+    rt.set_robot(create_robot("arm"))
+    rt.set_joint_positions([0.15, -0.2, 0.1, 0.05, -0.1, 0.2])
+    try:
+        for _ in range(10):
+            rt.step_once()
+        backend = rt.engine._physics_backend
+        initial = backend.snapshot()
+        for _ in range(100):
+            rt.step_once()
+        first = hashlib.sha256(backend.snapshot()).hexdigest()
+
+        backend.restore(initial)
+        for _ in range(100):
+            rt.step_once()
+        replay = hashlib.sha256(backend.snapshot()).hexdigest()
+        assert replay == first
     finally:
         rt.stop()
 
